@@ -27,7 +27,8 @@
     "storage",
     "offscreen",
     "clipboardWrite",
-    "tabs"
+    "tabs",
+    "windows"
   ],
   "host_permissions": [
     "https://chat.openai.com/*",
@@ -35,7 +36,10 @@
     "https://gemini.google.com/*",
     "https://claude.ai/*",
     "https://www.perplexity.ai/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://www.reddit.com/*",
+    "https://reddit.com/*",
+    "<all_urls>"
   ],
   "content_scripts": [
     {

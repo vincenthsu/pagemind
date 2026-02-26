@@ -96,10 +96,61 @@ async function handleSummarize({ provider, promptIndex }) {
     console.warn('[AI Summarizer] Clipboard write failed:', e.message);
   }
 
-  // Open the AI provider in a new tab
-  await chrome.tabs.create({ url: providerConfig.url, active: true });
+  // Open the AI provider in a companion window to the right
+  await openCompanionWindow(providerConfig.url, activeTab.windowId);
 
   return { success: true };
+}
+
+// --- Companion Window ---
+// Opens the AI provider as a full-height panel snapped to the right edge of the browser window.
+async function openCompanionWindow(url, sourceWindowId) {
+  const PANEL_WIDTH = 480;
+
+  let currentWin;
+  try {
+    currentWin = sourceWindowId
+      ? await chrome.windows.get(sourceWindowId)
+      : await chrome.windows.getCurrent({ populate: false });
+  } catch {
+    currentWin = null;
+  }
+
+  // First close any existing companion window for this provider to avoid duplicates
+  try {
+    const allWindows = await chrome.windows.getAll({ populate: false, windowTypes: ['popup'] });
+    for (const win of allWindows) {
+      // We tag companion windows via stored ID
+      const stored = await chrome.storage.session.get(['companionWindowId']);
+      if (stored.companionWindowId === win.id) {
+        await chrome.windows.remove(win.id).catch(() => {});
+        break;
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  let createParams;
+  if (currentWin && currentWin.left != null) {
+    // Snap to the right edge of the current browser window
+    const left = currentWin.left + currentWin.width - PANEL_WIDTH;
+    createParams = {
+      url,
+      type: 'popup',
+      width: PANEL_WIDTH,
+      height: currentWin.height,
+      left: Math.max(0, left),
+      top: currentWin.top,
+      focused: true,
+    };
+  } else {
+    // Fallback: open in a new tab
+    await chrome.tabs.create({ url, active: true });
+    return;
+  }
+
+  const newWin = await chrome.windows.create(createParams);
+  // Remember this window so we can reuse / close it next time
+  await chrome.storage.session.set({ companionWindowId: newWin.id });
 }
 
 // --- Clipboard via Offscreen Document ---

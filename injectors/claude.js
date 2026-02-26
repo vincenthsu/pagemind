@@ -9,6 +9,7 @@
 
   let polls = 0;
   let injected = false;
+  let cachedPayload = null; // cache after first fetch — storage clears on first GET_PAYLOAD
 
   function getInputEl() {
     return (
@@ -50,13 +51,15 @@
     if (polls >= MAX_POLLS) return;
     polls++;
 
-    let payload = null;
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
-      payload = response?.payload;
-    } catch (e) {
-      return;
+    if (!cachedPayload) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
+        cachedPayload = response?.payload ?? null;
+      } catch (e) {
+        return;
+      }
     }
+    const payload = cachedPayload;
 
     if (!payload) {
       setTimeout(tryInject, POLL_INTERVAL);
