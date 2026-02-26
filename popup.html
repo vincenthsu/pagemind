@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Page Summarizer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      width: 300px;
+      background: #f8f9fa;
+      color: #1a1a2e;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #4882f4, #7c6aee);
+      color: white;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    .settings-btn {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.85);
+      cursor: pointer;
+      font-size: 16px;
+      padding: 2px 4px;
+      border-radius: 4px;
+      line-height: 1;
+      transition: background 0.15s;
+    }
+
+    .settings-btn:hover {
+      background: rgba(255,255,255,0.2);
+      color: white;
+    }
+
+    .content {
+      padding: 14px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #666;
+      margin-bottom: 7px;
+    }
+
+    /* Provider grid */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .provider-btn {
+      padding: 8px 6px;
+      border-radius: 8px;
+      border: 2px solid #e0e0e0;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: #444;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: center;
+    }
+
+    .provider-btn:hover {
+      border-color: #aaa;
+      background: #f5f5f5;
+    }
+
+    .provider-btn.selected {
+      border-color: var(--provider-color, #4882f4);
+      background: var(--provider-bg, #eef3ff);
+      color: var(--provider-color, #4882f4);
+    }
+
+    .provider-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+
+    /* Prompt selector */
+    .prompt-section {
+      margin-bottom: 14px;
+    }
+
+    .prompt-select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      background: white;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+    }
+
+    .prompt-select:focus {
+      border-color: #4882f4;
+    }
+
+    /* Action area */
+    .action-area {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .summarize-btn {
+      width: 100%;
+      padding: 10px;
+      background: linear-gradient(135deg, #4882f4, #7c6aee);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: 0.2px;
+    }
+
+    .summarize-btn:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    .summarize-btn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .summarize-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    /* Status messages */
+    .status {
+      font-size: 11.5px;
+      text-align: center;
+      padding: 5px 8px;
+      border-radius: 6px;
+      display: none;
+    }
+
+    .status.visible {
+      display: block;
+    }
+
+    .status.loading {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status.success {
+      background: #d1e7dd;
+      color: #0a3622;
+    }
+
+    .status.error {
+      background: #f8d7da;
+      color: #842029;
+    }
+
+    /* Clipboard hint */
+    .clipboard-hint {
+      font-size: 10.5px;
+      color: #888;
+      text-align: center;
+      display: none;
+    }
+
+    .clipboard-hint.visible {
+      display: block;
+    }
+
+    .divider {
+      height: 1px;
+      background: #eee;
+      margin: 2px 0 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>✨ AI Page Summarizer</h1>
+    <button class="settings-btn" id="settingsBtn" title="Settings">⚙</button>
+  </div>
+
+  <div class="content">
+    <!-- Provider Selection -->
+    <div class="section-label">AI Provider</div>
+    <div class="provider-grid" id="providerGrid">
+      <button class="provider-btn" data-provider="chatgpt"
+        style="--provider-color:#10a37f; --provider-bg:#e8f7f2">
+        <span class="provider-dot"></span>ChatGPT
+      </button>
+      <button class="provider-btn" data-provider="gemini"
+        style="--provider-color:#4285f4; --provider-bg:#e8f0fe">
+        <span class="provider-dot"></span>Gemini
+      </button>
+      <button class="provider-btn" data-provider="claude"
+        style="--provider-color:#d97757; --provider-bg:#fdf0ea">
+        <span class="provider-dot"></span>Claude
+      </button>
+      <button class="provider-btn" data-provider="perplexity"
+        style="--provider-color:#20b2aa; --provider-bg:#e6f7f7">
+        <span class="provider-dot"></span>Perplexity
+      </button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Prompt Selection -->
+    <div class="prompt-section">
+      <div class="section-label">Prompt</div>
+      <select class="prompt-select" id="promptSelect">
+        <!-- Options populated by popup.js -->
+      </select>
+    </div>
+
+    <!-- Action -->
+    <div class="action-area">
+      <button class="summarize-btn" id="summarizeBtn">
+        Summarize This Page
+      </button>
+      <div class="status" id="statusMsg"></div>
+      <div class="clipboard-hint" id="clipboardHint">
+        💡 Content also copied to clipboard
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

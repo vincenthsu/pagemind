@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Page Summarizer — Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    .page-header {
+      background: linear-gradient(135deg, #4882f4, #7c6aee);
+      color: white;
+      padding: 20px 32px;
+    }
+
+    .page-header h1 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .page-header p {
+      font-size: 13px;
+      opacity: 0.85;
+      margin-top: 4px;
+    }
+
+    .container {
+      max-width: 680px;
+      margin: 28px auto;
+      padding: 0 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 22px 24px;
+      margin-bottom: 18px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #1a1a2e;
+    }
+
+    .card-desc {
+      font-size: 12.5px;
+      color: #666;
+      margin-bottom: 16px;
+    }
+
+    /* Default provider */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+
+    .provider-btn {
+      padding: 9px 6px;
+      border-radius: 8px;
+      border: 2px solid #e0e0e0;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: #444;
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    .provider-btn:hover { border-color: #aaa; }
+
+    .provider-btn.selected {
+      border-color: var(--c);
+      background: var(--bg);
+      color: var(--c);
+      font-weight: 600;
+    }
+
+    /* Prompt list */
+    .prompt-list {
+      list-style: none;
+      margin-bottom: 14px;
+    }
+
+    .prompt-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #f8f9fa;
+      border: 1px solid #e8e8e8;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      transition: background 0.1s;
+    }
+
+    .prompt-item:hover { background: #f0f2f5; }
+
+    .prompt-text {
+      flex: 1;
+      font-size: 13px;
+      color: #333;
+      word-break: break-word;
+    }
+
+    .prompt-item.builtin .prompt-text {
+      color: #777;
+      font-style: italic;
+    }
+
+    .prompt-tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: #e8e8e8;
+      color: #666;
+      flex-shrink: 0;
+    }
+
+    .prompt-item.custom .prompt-tag {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+
+    .icon-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 3px 5px;
+      border-radius: 4px;
+      color: #888;
+      line-height: 1;
+      transition: background 0.1s, color 0.1s;
+      flex-shrink: 0;
+    }
+
+    .icon-btn:hover { background: #f0e8e8; color: #c0392b; }
+
+    .icon-btn.up:hover, .icon-btn.down:hover {
+      background: #e8f0f8;
+      color: #2563eb;
+    }
+
+    /* Add prompt form */
+    .add-prompt-form {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .add-prompt-textarea {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 60px;
+      outline: none;
+      transition: border-color 0.15s;
+      color: #333;
+    }
+
+    .add-prompt-textarea:focus { border-color: #4882f4; }
+
+    .add-btn {
+      padding: 8px 14px;
+      background: #4882f4;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+      align-self: flex-end;
+    }
+
+    .add-btn:hover { background: #3a70e0; }
+
+    /* Save button */
+    .save-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .save-btn {
+      padding: 10px 24px;
+      background: linear-gradient(135deg, #4882f4, #7c6aee);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .save-btn:hover { opacity: 0.9; }
+
+    .save-feedback {
+      font-size: 13px;
+      color: #2e7d32;
+      display: none;
+    }
+
+    .save-feedback.visible { display: block; }
+
+    /* Divider between custom and built-in sections */
+    .section-divider {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #999;
+      margin: 10px 0 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <h1>✨ AI Page Summarizer — Settings</h1>
+    <p>Configure your default AI provider and custom prompts</p>
+  </div>
+
+  <div class="container">
+
+    <!-- Default Provider -->
+    <div class="card">
+      <div class="card-title">Default AI Provider</div>
+      <div class="card-desc">Choose which AI service to use by default when opening the popup.</div>
+      <div class="provider-grid">
+        <button class="provider-btn" data-provider="chatgpt"
+          style="--c:#10a37f; --bg:#e8f7f2">ChatGPT</button>
+        <button class="provider-btn" data-provider="gemini"
+          style="--c:#4285f4; --bg:#e8f0fe">Gemini</button>
+        <button class="provider-btn" data-provider="claude"
+          style="--c:#d97757; --bg:#fdf0ea">Claude</button>
+        <button class="provider-btn" data-provider="perplexity"
+          style="--c:#20b2aa; --bg:#e6f7f7">Perplexity</button>
+      </div>
+    </div>
+
+    <!-- Custom Prompts -->
+    <div class="card">
+      <div class="card-title">Prompts</div>
+      <div class="card-desc">Your custom prompts appear first in the dropdown. Drag to reorder using the arrow buttons.</div>
+
+      <ul class="prompt-list" id="promptList">
+        <!-- Populated by options.js -->
+      </ul>
+
+      <!-- Add new prompt -->
+      <div class="add-prompt-form">
+        <textarea
+          class="add-prompt-textarea"
+          id="newPromptInput"
+          placeholder="Type a new prompt… e.g. 'List all technical terms with definitions:'"
+        ></textarea>
+        <button class="add-btn" id="addPromptBtn">+ Add</button>
+      </div>
+    </div>
+
+    <!-- Save -->
+    <div class="card">
+      <div class="save-area">
+        <button class="save-btn" id="saveBtn">Save Settings</button>
+        <span class="save-feedback" id="saveFeedback">✓ Settings saved!</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
