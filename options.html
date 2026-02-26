@@ -230,6 +230,60 @@
       color: #999;
       margin: 10px 0 8px;
     }
+
+    /* Open mode radio options */
+    .mode-options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mode-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .mode-option:hover {
+      border-color: #b0b8d0;
+      background: #fafbff;
+    }
+
+    .mode-option input[type="radio"] {
+      margin-top: 2px;
+      accent-color: #4882f4;
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .mode-option-body {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .mode-option-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    .mode-option-desc {
+      font-size: 12px;
+      color: #777;
+    }
+
+    .mode-option:has(input:checked) {
+      border-color: #4882f4;
+      background: #eef3ff;
+    }
   </style>
 </head>
 <body>
@@ -253,6 +307,28 @@
           style="--c:#d97757; --bg:#fdf0ea">Claude</button>
         <button class="provider-btn" data-provider="perplexity"
           style="--c:#20b2aa; --bg:#e6f7f7">Perplexity</button>
+      </div>
+    </div>
+
+    <!-- AI Provider Window Mode -->
+    <div class="card">
+      <div class="card-title">AI Provider Window</div>
+      <div class="card-desc">Choose how the AI provider page opens after summarization.</div>
+      <div class="mode-options">
+        <label class="mode-option">
+          <input type="radio" name="openMode" value="companion" id="modeCompanion" checked>
+          <div class="mode-option-body">
+            <div class="mode-option-title">🪟 Companion Window</div>
+            <div class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original window auto-resizes and restores on close.</div>
+          </div>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="openMode" value="newtab" id="modeNewTab">
+          <div class="mode-option-body">
+            <div class="mode-option-title">🗂 New Tab</div>
+            <div class="mode-option-desc">Opens the AI provider in a new browser tab in the current window.</div>
+          </div>
+        </label>
       </div>
     </div>
 

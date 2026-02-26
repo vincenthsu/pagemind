@@ -5,6 +5,29 @@ import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
 
 const MAX_CONTENT_CHARS = 12000;
 
+// --- Restore main window when companion is closed ---
+chrome.windows.onRemoved.addListener(async (closedWindowId) => {
+  try {
+    const data = await chrome.storage.session.get(['companionWindowId', 'originalWindowBounds']);
+    if (data.companionWindowId !== closedWindowId) return;
+
+    // Clear companion tracking
+    await chrome.storage.session.remove(['companionWindowId', 'originalWindowBounds']);
+
+    // Restore original window bounds
+    const bounds = data.originalWindowBounds;
+    if (bounds) {
+      await chrome.windows.update(bounds.id, {
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+        state: 'normal',
+      }).catch(() => {});
+    }
+  } catch { /* non-fatal */ }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SUMMARIZE') {
     handleSummarize(message)
@@ -67,8 +90,8 @@ async function handleSummarize({ provider, promptIndex }) {
     }
   }
 
-  // Get the selected prompt
-  const settings = await chrome.storage.sync.get(['customPrompts']);
+  // Get the selected prompt and open mode setting in one call
+  const settings = await chrome.storage.sync.get(['customPrompts', 'openMode']);
   const allPrompts = [...(settings.customPrompts || []), ...DEFAULT_PROMPTS];
   const prompt = allPrompts[promptIndex] ?? DEFAULT_PROMPTS[0];
 
@@ -92,18 +115,24 @@ async function handleSummarize({ provider, promptIndex }) {
   try {
     await writeToClipboard(fullMessage);
   } catch (e) {
-    // Non-fatal — clipboard is just a convenience fallback
     console.warn('[AI Summarizer] Clipboard write failed:', e.message);
   }
 
-  // Open the AI provider in a companion window to the right
-  await openCompanionWindow(providerConfig.url, activeTab.windowId);
+  // Check open mode setting
+  const openMode = settings.openMode || 'companion';
+
+  if (openMode === 'newtab') {
+    await chrome.tabs.create({ url: providerConfig.url, active: true });
+  } else {
+    await openCompanionWindow(providerConfig.url, activeTab.windowId);
+  }
 
   return { success: true };
 }
 
 // --- Companion Window ---
-// Opens the AI provider as a full-height panel snapped to the right edge of the browser window.
+// Resizes the main browser window to make room, then opens the AI provider
+// as a full-height popup window snapped to the right edge.
 async function openCompanionWindow(url, sourceWindowId) {
   const PANEL_WIDTH = 480;
 
@@ -116,41 +145,60 @@ async function openCompanionWindow(url, sourceWindowId) {
     currentWin = null;
   }
 
-  // First close any existing companion window for this provider to avoid duplicates
-  try {
-    const allWindows = await chrome.windows.getAll({ populate: false, windowTypes: ['popup'] });
-    for (const win of allWindows) {
-      // We tag companion windows via stored ID
-      const stored = await chrome.storage.session.get(['companionWindowId']);
-      if (stored.companionWindowId === win.id) {
-        await chrome.windows.remove(win.id).catch(() => {});
-        break;
-      }
-    }
-  } catch { /* non-fatal */ }
-
-  let createParams;
-  if (currentWin && currentWin.left != null) {
-    // Snap to the right edge of the current browser window
-    const left = currentWin.left + currentWin.width - PANEL_WIDTH;
-    createParams = {
-      url,
-      type: 'popup',
-      width: PANEL_WIDTH,
-      height: currentWin.height,
-      left: Math.max(0, left),
-      top: currentWin.top,
-      focused: true,
-    };
-  } else {
+  if (!currentWin || currentWin.left == null) {
     // Fallback: open in a new tab
     await chrome.tabs.create({ url, active: true });
     return;
   }
 
-  const newWin = await chrome.windows.create(createParams);
-  // Remember this window so we can reuse / close it next time
-  await chrome.storage.session.set({ companionWindowId: newWin.id });
+  // Close any existing companion window first
+  try {
+    const stored = await chrome.storage.session.get(['companionWindowId']);
+    if (stored.companionWindowId) {
+      await chrome.windows.remove(stored.companionWindowId).catch(() => {});
+      // Small delay to let the window close and onRemoved fire before we overwrite the saved bounds
+      await new Promise((r) => setTimeout(r, 150));
+      // Re-fetch currentWin in case onRemoved already restored it
+      currentWin = await chrome.windows.get(sourceWindowId || currentWin.id).catch(() => currentWin);
+    }
+  } catch { /* non-fatal */ }
+
+  // Save original bounds so we can restore on companion close
+  const originalBounds = {
+    id: currentWin.id,
+    left: currentWin.left,
+    top: currentWin.top,
+    width: currentWin.width,
+    height: currentWin.height,
+  };
+
+  // Shrink the main window to sit beside the companion panel
+  const mainWidth = Math.max(400, currentWin.width - PANEL_WIDTH);
+  await chrome.windows.update(currentWin.id, {
+    state: 'normal',
+    left: currentWin.left,
+    top: currentWin.top,
+    width: mainWidth,
+    height: currentWin.height,
+  });
+
+  // Open companion panel flush against the right edge of the (now-resized) main window
+  const companionLeft = currentWin.left + mainWidth;
+  const newWin = await chrome.windows.create({
+    url,
+    type: 'popup',
+    width: PANEL_WIDTH,
+    height: currentWin.height,
+    left: companionLeft,
+    top: currentWin.top,
+    focused: true,
+  });
+
+  // Persist tracking data
+  await chrome.storage.session.set({
+    companionWindowId: newWin.id,
+    originalWindowBounds: originalBounds,
+  });
 }
 
 // --- Clipboard via Offscreen Document ---

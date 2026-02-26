@@ -11,6 +11,7 @@ const DEFAULT_PROMPTS = [
 
 let customPrompts = [];
 let defaultProvider = 'chatgpt';
+let openMode = 'companion';
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
@@ -43,11 +44,15 @@ document.addEventListener('click', (e) => {
 });
 
 function loadSettings() {
-  chrome.storage.sync.get(['customPrompts', 'defaultProvider'], (data) => {
+  chrome.storage.sync.get(['customPrompts', 'defaultProvider', 'openMode'], (data) => {
     customPrompts = data.customPrompts || [];
     defaultProvider = data.defaultProvider || 'chatgpt';
+    openMode = data.openMode || 'companion';
     updateProviderButtons();
     renderPromptList();
+    // Set radio button
+    const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
+    if (radio) radio.checked = true;
   });
 }
 
@@ -154,7 +159,8 @@ function movePrompt(index, direction) {
 }
 
 function saveSettings() {
-  chrome.storage.sync.set({ customPrompts, defaultProvider }, () => {
+  const selectedMode = document.querySelector('input[name="openMode"]:checked')?.value || 'companion';
+  chrome.storage.sync.set({ customPrompts, defaultProvider, openMode: selectedMode }, () => {
     // Also update the lastProvider if it matches what we're saving as default
     chrome.storage.sync.set({ lastProvider: defaultProvider });
 
