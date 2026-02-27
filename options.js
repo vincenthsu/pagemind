@@ -12,6 +12,9 @@ const DEFAULT_PROMPTS = [
 let customPrompts = [];
 let defaultProvider = 'chatgpt';
 let openMode = 'companion';
+let autoSubmit = true;
+let includeUrl = true;
+let maxContentChars = 12000;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
@@ -44,15 +47,26 @@ document.addEventListener('click', (e) => {
 });
 
 function loadSettings() {
-  chrome.storage.sync.get(['customPrompts', 'defaultProvider', 'openMode'], (data) => {
+  chrome.storage.sync.get(['customPrompts', 'defaultProvider', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars'], (data) => {
     customPrompts = data.customPrompts || [];
     defaultProvider = data.defaultProvider || 'chatgpt';
     openMode = data.openMode || 'companion';
+    autoSubmit = data.autoSubmit !== undefined ? data.autoSubmit : true;
+    includeUrl = data.includeUrl !== undefined ? data.includeUrl : true;
+    maxContentChars = data.maxContentChars || 12000;
     updateProviderButtons();
     renderPromptList();
     // Set radio button
     const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
     if (radio) radio.checked = true;
+    // Set toggles
+    const autoSubmitToggle = document.getElementById('autoSubmitToggle');
+    if (autoSubmitToggle) autoSubmitToggle.checked = autoSubmit;
+    const includeUrlToggle = document.getElementById('includeUrlToggle');
+    if (includeUrlToggle) includeUrlToggle.checked = includeUrl;
+    // Set number input
+    const maxCharsInput = document.getElementById('maxCharsInput');
+    if (maxCharsInput) maxCharsInput.value = maxContentChars;
   });
 }
 
@@ -160,7 +174,18 @@ function movePrompt(index, direction) {
 
 function saveSettings() {
   const selectedMode = document.querySelector('input[name="openMode"]:checked')?.value || 'companion';
-  chrome.storage.sync.set({ customPrompts, defaultProvider, openMode: selectedMode }, () => {
+  const autoSubmitVal = document.getElementById('autoSubmitToggle')?.checked ?? true;
+  const includeUrlVal = document.getElementById('includeUrlToggle')?.checked ?? true;
+  const maxCharsVal = parseInt(document.getElementById('maxCharsInput')?.value, 10) || 12000;
+
+  chrome.storage.sync.set({
+    customPrompts,
+    defaultProvider,
+    openMode: selectedMode,
+    autoSubmit: autoSubmitVal,
+    includeUrl: includeUrlVal,
+    maxContentChars: maxCharsVal,
+  }, () => {
     // Also update the lastProvider if it matches what we're saving as default
     chrome.storage.sync.set({ lastProvider: defaultProvider });
 

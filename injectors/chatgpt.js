@@ -78,23 +78,26 @@
     injected = true;
     setContentEditableValue(inputEl, payload.text);
 
-    // Give React time to update state and enable the send button
-    await new Promise((r) => setTimeout(r, 700));
+    // Only auto-submit if the setting is enabled
+    if (payload.autoSubmit !== false) {
+      // Give React time to update state and enable the send button
+      await new Promise((r) => setTimeout(r, 700));
 
-    const submitEl = getSubmitEl();
-    if (submitEl && !submitEl.disabled) {
-      submitEl.click();
-    } else {
-      // ChatGPT also submits on Enter (without Shift)
-      inputEl.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Enter',
-          code: 'Enter',
-          bubbles: true,
-          cancelable: true,
-          shiftKey: false,
-        })
-      );
+      const submitEl = getSubmitEl();
+      if (submitEl && !submitEl.disabled) {
+        submitEl.click();
+      } else {
+        // ChatGPT also submits on Enter (without Shift)
+        inputEl.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            bubbles: true,
+            cancelable: true,
+            shiftKey: false,
+          })
+        );
+      }
     }
   }
 

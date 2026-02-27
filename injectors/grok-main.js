@@ -76,6 +76,7 @@
     const text = event.data.text;
     if (!text) return;
 
+    const autoSubmit = event.data.autoSubmit;
     injected = true;
     console.log('[AI-Summarizer][MAIN] received payload, text length:', text.length);
 
@@ -87,22 +88,25 @@
         console.log('[AI-Summarizer][MAIN] found input:', inputEl.tagName, inputEl.id || inputEl.className);
         setInputValue(inputEl, text);
 
-        // Wait for the UI framework to process and enable the submit button
-        await new Promise((r) => setTimeout(r, 800));
+        // Only auto-submit if the setting is enabled
+        if (autoSubmit !== false) {
+          // Wait for the UI framework to process and enable the submit button
+          await new Promise((r) => setTimeout(r, 800));
 
-        const submitEl = getSubmitEl();
-        console.log('[AI-Summarizer][MAIN] submit:', submitEl ? 'found' : 'NOT FOUND');
-        if (submitEl && !submitEl.disabled) {
-          submitEl.click();
-          console.log('[AI-Summarizer][MAIN] submit clicked');
-        } else {
-          console.log('[AI-Summarizer][MAIN] fallback: pressing Enter');
-          inputEl.dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: 'Enter', code: 'Enter',
-              bubbles: true, cancelable: true,
-            })
-          );
+          const submitEl = getSubmitEl();
+          console.log('[AI-Summarizer][MAIN] submit:', submitEl ? 'found' : 'NOT FOUND');
+          if (submitEl && !submitEl.disabled) {
+            submitEl.click();
+            console.log('[AI-Summarizer][MAIN] submit clicked');
+          } else {
+            console.log('[AI-Summarizer][MAIN] fallback: pressing Enter');
+            inputEl.dispatchEvent(
+              new KeyboardEvent('keydown', {
+                key: 'Enter', code: 'Enter',
+                bubbles: true, cancelable: true,
+              })
+            );
+          }
         }
         return;
       }

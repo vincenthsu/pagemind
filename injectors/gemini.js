@@ -82,17 +82,20 @@
     injected = true;
     setContentEditableValue(inputEl, payload.text);
 
-    // Gemini needs extra time before the send button becomes active
-    await new Promise((r) => setTimeout(r, 900));
+    // Only auto-submit if the setting is enabled
+    if (payload.autoSubmit !== false) {
+      // Gemini needs extra time before the send button becomes active
+      await new Promise((r) => setTimeout(r, 900));
 
-    const submitEl = getSubmitEl();
-    if (submitEl && !submitEl.disabled) {
-      submitEl.click();
-    } else {
-      // Try Enter key as fallback
-      inputEl.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
-      );
+      const submitEl = getSubmitEl();
+      if (submitEl && !submitEl.disabled) {
+        submitEl.click();
+      } else {
+        // Try Enter key as fallback
+        inputEl.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
+        );
+      }
     }
   }
 

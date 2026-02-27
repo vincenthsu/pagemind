@@ -49,7 +49,7 @@
     // Retry several times in case MAIN world listener isn't registered yet
     for (let i = 0; i < 8; i++) {
       setTimeout(() => {
-        window.postMessage({ type: MSG_TYPE, text: payload.text }, '*');
+        window.postMessage({ type: MSG_TYPE, text: payload.text, autoSubmit: payload.autoSubmit }, '*');
       }, i * 300);
     }
   }

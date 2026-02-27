@@ -79,16 +79,19 @@
     injected = true;
     setContentEditableValue(inputEl, payload.text);
 
-    await new Promise((r) => setTimeout(r, 700));
+    // Only auto-submit if the setting is enabled
+    if (payload.autoSubmit !== false) {
+      await new Promise((r) => setTimeout(r, 700));
 
-    const submitEl = getSubmitEl();
-    if (submitEl && !submitEl.disabled) {
-      submitEl.click();
-    } else {
-      // Claude also responds to Enter key in ProseMirror
-      inputEl.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
-      );
+      const submitEl = getSubmitEl();
+      if (submitEl && !submitEl.disabled) {
+        submitEl.click();
+      } else {
+        // Claude also responds to Enter key in ProseMirror
+        inputEl.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
+        );
+      }
     }
   }
 

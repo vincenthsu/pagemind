@@ -284,6 +284,98 @@
       border-color: #4882f4;
       background: #eef3ff;
     }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+
+    .toggle-row-label {
+      font-size: 13.5px;
+      color: #333;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc;
+      border-radius: 24px;
+      transition: 0.2s;
+    }
+
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background: #4882f4;
+    }
+
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(20px);
+    }
+
+    /* Number input */
+    .number-input-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+    }
+
+    .number-input-row label {
+      font-size: 13.5px;
+      color: #333;
+      flex: 1;
+    }
+
+    .number-input {
+      width: 100px;
+      padding: 6px 10px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      text-align: right;
+      transition: border-color 0.15s;
+      color: #333;
+    }
+
+    .number-input:focus {
+      border-color: #4882f4;
+    }
+
+    .input-suffix {
+      font-size: 12.5px;
+      color: #888;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -329,6 +421,34 @@
             <div class="mode-option-desc">Opens the AI provider in a new browser tab in the current window.</div>
           </div>
         </label>
+      </div>
+    </div>
+
+    <!-- Sending Options -->
+    <div class="card">
+      <div class="card-title">Sending Options</div>
+      <div class="card-desc">Configure how content is sent to the AI provider.</div>
+
+      <div class="toggle-row" style="margin-bottom: 12px;">
+        <span class="toggle-row-label">Auto-submit after pasting</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="autoSubmitToggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row" style="margin-bottom: 12px;">
+        <span class="toggle-row-label">Include page URL</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="includeUrlToggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="number-input-row">
+        <label for="maxCharsInput">Content character limit</label>
+        <input type="number" class="number-input" id="maxCharsInput" value="12000" min="1000" max="100000" step="1000">
+        <span class="input-suffix">chars</span>
       </div>
     </div>
 

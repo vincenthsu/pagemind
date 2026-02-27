@@ -3,7 +3,7 @@
 
 import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
 
-const MAX_CONTENT_CHARS = 12000;
+const DEFAULT_MAX_CONTENT_CHARS = 12000;
 
 // --- Restore main window when companion is closed ---
 chrome.windows.onRemoved.addListener(async (closedWindowId) => {
@@ -90,23 +90,32 @@ async function handleSummarize({ provider, promptIndex }) {
     }
   }
 
-  // Get the selected prompt and open mode setting in one call
-  const settings = await chrome.storage.sync.get(['customPrompts', 'openMode']);
+  // Get the selected prompt and settings in one call
+  const settings = await chrome.storage.sync.get(['customPrompts', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars']);
   const allPrompts = [...(settings.customPrompts || []), ...DEFAULT_PROMPTS];
   const prompt = allPrompts[promptIndex] ?? DEFAULT_PROMPTS[0];
+  const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
+  const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
+  const maxContentChars = settings.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
 
   // Truncate content if needed
-  const truncated = extractedContent.length > MAX_CONTENT_CHARS
-    ? extractedContent.slice(0, MAX_CONTENT_CHARS) + '\n\n[Content truncated — article is too long]'
+  const truncated = extractedContent.length > maxContentChars
+    ? extractedContent.slice(0, maxContentChars) + '\n\n[Content truncated — article is too long]'
     : extractedContent;
 
-  const fullMessage = `${prompt}\n\n---\n\n${truncated}`;
+  // Build full message: prompt + optional URL + content
+  let fullMessage = prompt;
+  if (includeUrl && tabUrl) {
+    fullMessage += `\n\nSource URL: ${tabUrl}`;
+  }
+  fullMessage += `\n\n---\n\n${truncated}`;
 
   // Store payload in session storage (ephemeral, cleared after injection)
   await chrome.storage.session.set({
     pendingPayload: {
       text: fullMessage,
       provider,
+      autoSubmit,
       createdAt: Date.now(),
     },
   });
