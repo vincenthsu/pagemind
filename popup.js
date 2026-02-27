@@ -116,7 +116,7 @@ async function handleSummarize() {
           chatgpt: 'ChatGPT',
           gemini: 'Gemini',
           claude: 'Claude',
-          perplexity: 'Perplexity',
+          grok: 'Grok',
         };
         setStatus('success', `✅ Sent to ${providerLabels[selectedProvider] || selectedProvider}`);
         showClipboardHint();

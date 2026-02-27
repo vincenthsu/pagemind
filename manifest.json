@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Page Summarizer",
   "version": "1.0.0",
-  "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Perplexity for summarization.",
+  "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -35,10 +35,8 @@
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
     "https://claude.ai/*",
-    "https://www.perplexity.ai/*",
+    "https://grok.com/*",
     "https://www.youtube.com/*",
-    "https://www.reddit.com/*",
-    "https://reddit.com/*",
     "<all_urls>"
   ],
   "content_scripts": [
@@ -58,9 +56,15 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.perplexity.ai/*"],
-      "js": ["injectors/perplexity.js"],
+      "matches": ["https://grok.com/*"],
+      "js": ["injectors/grok.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://grok.com/*"],
+      "js": ["injectors/grok-main.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
