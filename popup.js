@@ -14,6 +14,19 @@ let allPrompts = [];
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // Check if Quick Summarize is enabled — if so, auto-trigger and skip UI
+  const { quickSummarize } = await chrome.storage.sync.get(['quickSummarize']);
+  if (quickSummarize) {
+    const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
+    const provider = settings.defaultProvider || 'chatgpt';
+    const promptIndex = settings.defaultPromptIndex ?? 0;
+    chrome.runtime.sendMessage(
+      { type: 'SUMMARIZE', provider, promptIndex },
+      () => window.close()
+    );
+    return;
+  }
+
   await loadSettings();
   renderPrompts();
   setupEventListeners();

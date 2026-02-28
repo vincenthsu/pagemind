@@ -1,11 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Page Summarizer — Settings</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -42,7 +47,7 @@
       border-radius: 12px;
       padding: 22px 24px;
       margin-bottom: 18px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
     }
 
     .card-title {
@@ -78,7 +83,9 @@
       text-align: center;
     }
 
-    .provider-btn:hover { border-color: #aaa; }
+    .provider-btn:hover {
+      border-color: #aaa;
+    }
 
     .provider-btn.selected {
       border-color: var(--c);
@@ -105,7 +112,9 @@
       transition: background 0.1s;
     }
 
-    .prompt-item:hover { background: #f0f2f5; }
+    .prompt-item:hover {
+      background: #f0f2f5;
+    }
 
     .prompt-text {
       flex: 1;
@@ -146,9 +155,13 @@
       flex-shrink: 0;
     }
 
-    .icon-btn:hover { background: #f0e8e8; color: #c0392b; }
+    .icon-btn:hover {
+      background: #f0e8e8;
+      color: #c0392b;
+    }
 
-    .icon-btn.up:hover, .icon-btn.down:hover {
+    .icon-btn.up:hover,
+    .icon-btn.down:hover {
       background: #e8f0f8;
       color: #2563eb;
     }
@@ -174,7 +187,9 @@
       color: #333;
     }
 
-    .add-prompt-textarea:focus { border-color: #4882f4; }
+    .add-prompt-textarea:focus {
+      border-color: #4882f4;
+    }
 
     .add-btn {
       padding: 8px 14px;
@@ -190,36 +205,55 @@
       align-self: flex-end;
     }
 
-    .add-btn:hover { background: #3a70e0; }
-
-    /* Save button */
-    .save-area {
-      display: flex;
-      align-items: center;
-      gap: 12px;
+    .add-btn:hover {
+      background: #3a70e0;
     }
 
-    .save-btn {
-      padding: 10px 24px;
-      background: linear-gradient(135deg, #4882f4, #7c6aee);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.15s;
-    }
-
-    .save-btn:hover { opacity: 0.9; }
-
+    /* Save feedback (floating toast) */
     .save-feedback {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
       font-size: 13px;
       color: #2e7d32;
-      display: none;
+      background: #d1e7dd;
+      padding: 10px 18px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none;
+      z-index: 1000;
     }
 
-    .save-feedback.visible { display: block; }
+    .save-feedback.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Prompt select dropdown (reused from popup) */
+    .prompt-select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      background: white;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+    }
+
+    .prompt-select:focus {
+      border-color: #4882f4;
+    }
 
     /* Divider between custom and built-in sections */
     .section-divider {
@@ -314,7 +348,10 @@
     .toggle-slider {
       position: absolute;
       cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       background: #ccc;
       border-radius: 24px;
       transition: 0.2s;
@@ -332,11 +369,11 @@
       transition: 0.2s;
     }
 
-    .toggle-switch input:checked + .toggle-slider {
+    .toggle-switch input:checked+.toggle-slider {
       background: #4882f4;
     }
 
-    .toggle-switch input:checked + .toggle-slider::before {
+    .toggle-switch input:checked+.toggle-slider::before {
       transform: translateX(20px);
     }
 
@@ -378,6 +415,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="page-header">
     <h1>✨ AI Page Summarizer — Settings</h1>
@@ -390,15 +428,11 @@
     <div class="card">
       <div class="card-title">Default AI Provider</div>
       <div class="card-desc">Choose which AI service to use by default when opening the popup.</div>
-      <div class="provider-grid">
-        <button class="provider-btn" data-provider="chatgpt"
-          style="--c:#10a37f; --bg:#e8f7f2">ChatGPT</button>
-        <button class="provider-btn" data-provider="gemini"
-          style="--c:#4285f4; --bg:#e8f0fe">Gemini</button>
-        <button class="provider-btn" data-provider="claude"
-          style="--c:#d97757; --bg:#fdf0ea">Claude</button>
-        <button class="provider-btn" data-provider="grok"
-          style="--c:#1d9bf0; --bg:#e8f4fd">Grok</button>
+      <div class="provider-grid" id="providerGrid">
+        <button class="provider-btn" data-provider="chatgpt" style="--c:#10a37f; --bg:#e8f7f2">ChatGPT</button>
+        <button class="provider-btn" data-provider="gemini" style="--c:#4285f4; --bg:#e8f0fe">Gemini</button>
+        <button class="provider-btn" data-provider="claude" style="--c:#d97757; --bg:#fdf0ea">Claude</button>
+        <button class="provider-btn" data-provider="grok" style="--c:#1d9bf0; --bg:#e8f4fd">Grok</button>
       </div>
     </div>
 
@@ -411,7 +445,8 @@
           <input type="radio" name="openMode" value="companion" id="modeCompanion" checked>
           <div class="mode-option-body">
             <div class="mode-option-title">➡️ Companion Window</div>
-            <div class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original window auto-resizes and restores on close.</div>
+            <div class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original
+              window auto-resizes and restores on close.</div>
           </div>
         </label>
         <label class="mode-option">
@@ -452,10 +487,32 @@
       </div>
     </div>
 
+    <!-- Quick Summarize Mode -->
+    <div class="card">
+      <div class="card-title">Quick Summarize</div>
+      <div class="card-desc">When enabled, clicking the extension icon will immediately summarize using the Default AI
+        Provider and Default Prompt above — no popup. You can always access settings from the right-click context menu.
+      </div>
+
+      <div class="toggle-row">
+        <span class="toggle-row-label">Click icon to summarize directly</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="quickSummarizeToggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
     <!-- Custom Prompts -->
     <div class="card">
       <div class="card-title">Prompts</div>
-      <div class="card-desc">Your custom prompts appear first in the dropdown. Drag to reorder using the arrow buttons.</div>
+      <div class="card-desc">Your custom prompts appear first in the dropdown. Reorder using the arrow buttons.</div>
+
+      <!-- Default Prompt Selector -->
+      <div class="section-label" style="margin-bottom: 6px;">Default Prompt</div>
+      <select class="prompt-select" id="defaultPromptSelect" style="margin-bottom: 16px;">
+        <!-- Populated by options.js -->
+      </select>
 
       <ul class="prompt-list" id="promptList">
         <!-- Populated by options.js -->
@@ -463,25 +520,18 @@
 
       <!-- Add new prompt -->
       <div class="add-prompt-form">
-        <textarea
-          class="add-prompt-textarea"
-          id="newPromptInput"
-          placeholder="Type a new prompt… e.g. 'List all technical terms with definitions:'"
-        ></textarea>
+        <textarea class="add-prompt-textarea" id="newPromptInput"
+          placeholder="Type a new prompt… e.g. 'List all technical terms with definitions:'"></textarea>
         <button class="add-btn" id="addPromptBtn">+ Add</button>
       </div>
     </div>
 
-    <!-- Save -->
-    <div class="card">
-      <div class="save-area">
-        <button class="save-btn" id="saveBtn">Save Settings</button>
-        <span class="save-feedback" id="saveFeedback">✓ Settings saved!</span>
-      </div>
-    </div>
+    <!-- Auto-save feedback (floating) -->
+    <span class="save-feedback" id="saveFeedback">✓ Settings saved</span>
 
   </div>
 
   <script src="options.js"></script>
 </body>
+
 </html>

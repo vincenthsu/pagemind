@@ -28,7 +28,8 @@
     "offscreen",
     "clipboardWrite",
     "tabs",
-    "windows"
+    "windows",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://chat.openai.com/*",
@@ -41,36 +42,61 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
-      "js": ["injectors/chatgpt.js"],
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "injectors/chatgpt.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["injectors/gemini.js"],
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "injectors/gemini.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://claude.ai/*"],
-      "js": ["injectors/claude.js"],
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "injectors/claude.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://grok.com/*"],
-      "js": ["injectors/grok.js"],
+      "matches": [
+        "https://grok.com/*"
+      ],
+      "js": [
+        "injectors/grok.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://grok.com/*"],
-      "js": ["injectors/grok-main.js"],
+      "matches": [
+        "https://grok.com/*"
+      ],
+      "js": [
+        "injectors/grok-main.js"
+      ],
       "run_at": "document_idle",
       "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["offscreen/offscreen.html"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "offscreen/offscreen.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

@@ -11,63 +11,80 @@ const DEFAULT_PROMPTS = [
 
 let customPrompts = [];
 let defaultProvider = 'chatgpt';
+let defaultPromptIndex = 0;
 let openMode = 'companion';
 let autoSubmit = true;
 let includeUrl = true;
 let maxContentChars = 12000;
+let quickSummarize = false;
+
+// Debounce timer for auto-save
+let saveTimer = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
 
-  document.getElementById('addPromptBtn').addEventListener('click', addPrompt);
+  document.getElementById('addPromptBtn').addEventListener('click', () => {
+    addPrompt();
+    autoSave();
+  });
   document.getElementById('newPromptInput').addEventListener('keydown', (e) => {
-    // Ctrl+Enter or Cmd+Enter to add
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       addPrompt();
+      autoSave();
     }
   });
 
-  document.getElementById('providerGrid')?.addEventListener('click', (e) => {
+  document.getElementById('providerGrid').addEventListener('click', (e) => {
     const btn = e.target.closest('.provider-btn');
     if (!btn) return;
     defaultProvider = btn.dataset.provider;
     updateProviderButtons();
+    autoSave();
   });
 
-  document.getElementById('saveBtn').addEventListener('click', saveSettings);
-});
+  // Auto-save on any option change
+  document.querySelectorAll('input[name="openMode"]').forEach((radio) => {
+    radio.addEventListener('change', () => autoSave());
+  });
+  document.getElementById('autoSubmitToggle').addEventListener('change', () => autoSave());
+  document.getElementById('includeUrlToggle').addEventListener('change', () => autoSave());
+  document.getElementById('quickSummarizeToggle').addEventListener('change', () => autoSave());
+  document.getElementById('maxCharsInput').addEventListener('change', () => autoSave());
 
-// Also handle provider grid in options (it's declared with id in the HTML)
-document.addEventListener('click', (e) => {
-  if (e.target.closest('.provider-grid') && e.target.closest('.provider-btn')) {
-    // handled by the grid listener above, but also update visual state here
-    updateProviderButtons();
-  }
+  document.getElementById('defaultPromptSelect').addEventListener('change', (e) => {
+    defaultPromptIndex = parseInt(e.target.value, 10);
+    autoSave();
+  });
 });
 
 function loadSettings() {
-  chrome.storage.sync.get(['customPrompts', 'defaultProvider', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars'], (data) => {
-    customPrompts = data.customPrompts || [];
-    defaultProvider = data.defaultProvider || 'chatgpt';
-    openMode = data.openMode || 'companion';
-    autoSubmit = data.autoSubmit !== undefined ? data.autoSubmit : true;
-    includeUrl = data.includeUrl !== undefined ? data.includeUrl : true;
-    maxContentChars = data.maxContentChars || 12000;
-    updateProviderButtons();
-    renderPromptList();
-    // Set radio button
-    const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
-    if (radio) radio.checked = true;
-    // Set toggles
-    const autoSubmitToggle = document.getElementById('autoSubmitToggle');
-    if (autoSubmitToggle) autoSubmitToggle.checked = autoSubmit;
-    const includeUrlToggle = document.getElementById('includeUrlToggle');
-    if (includeUrlToggle) includeUrlToggle.checked = includeUrl;
-    // Set number input
-    const maxCharsInput = document.getElementById('maxCharsInput');
-    if (maxCharsInput) maxCharsInput.value = maxContentChars;
-  });
+  chrome.storage.sync.get(
+    ['customPrompts', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
+    (data) => {
+      customPrompts = data.customPrompts || [];
+      defaultProvider = data.defaultProvider || 'chatgpt';
+      defaultPromptIndex = data.defaultPromptIndex ?? 0;
+      openMode = data.openMode || 'companion';
+      autoSubmit = data.autoSubmit !== undefined ? data.autoSubmit : true;
+      includeUrl = data.includeUrl !== undefined ? data.includeUrl : true;
+      maxContentChars = data.maxContentChars || 12000;
+      quickSummarize = data.quickSummarize || false;
+
+      updateProviderButtons();
+      renderPromptList();
+      renderDefaultPromptSelect();
+
+      const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
+      if (radio) radio.checked = true;
+
+      document.getElementById('autoSubmitToggle').checked = autoSubmit;
+      document.getElementById('includeUrlToggle').checked = includeUrl;
+      document.getElementById('quickSummarizeToggle').checked = quickSummarize;
+      document.getElementById('maxCharsInput').value = maxContentChars;
+    }
+  );
 }
 
 function updateProviderButtons() {
@@ -76,11 +93,23 @@ function updateProviderButtons() {
   });
 }
 
+function renderDefaultPromptSelect() {
+  const select = document.getElementById('defaultPromptSelect');
+  const allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
+  select.innerHTML = '';
+  allPrompts.forEach((prompt, i) => {
+    const option = document.createElement('option');
+    option.value = i;
+    option.textContent = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt;
+    if (i === defaultPromptIndex) option.selected = true;
+    select.appendChild(option);
+  });
+}
+
 function renderPromptList() {
   const list = document.getElementById('promptList');
   list.innerHTML = '';
 
-  // Custom prompts (editable, reorderable)
   if (customPrompts.length > 0) {
     const customHeader = document.createElement('li');
     customHeader.className = 'section-divider';
@@ -92,7 +121,6 @@ function renderPromptList() {
     });
   }
 
-  // Built-in prompts (read-only display)
   const builtinHeader = document.createElement('li');
   builtinHeader.className = 'section-divider';
   builtinHeader.textContent = 'Built-in Prompts';
@@ -118,30 +146,27 @@ function createPromptItem(prompt, index, type) {
   li.appendChild(tag);
 
   if (type === 'custom') {
-    // Up button
     const upBtn = document.createElement('button');
     upBtn.className = 'icon-btn up';
     upBtn.title = 'Move up';
     upBtn.textContent = '↑';
     upBtn.disabled = index === 0;
-    upBtn.addEventListener('click', () => movePrompt(index, -1));
+    upBtn.addEventListener('click', () => { movePrompt(index, -1); autoSave(); });
     li.appendChild(upBtn);
 
-    // Down button
     const downBtn = document.createElement('button');
     downBtn.className = 'icon-btn down';
     downBtn.title = 'Move down';
     downBtn.textContent = '↓';
     downBtn.disabled = index === customPrompts.length - 1;
-    downBtn.addEventListener('click', () => movePrompt(index, 1));
+    downBtn.addEventListener('click', () => { movePrompt(index, 1); autoSave(); });
     li.appendChild(downBtn);
 
-    // Delete button
     const delBtn = document.createElement('button');
     delBtn.className = 'icon-btn';
     delBtn.title = 'Remove';
     delBtn.textContent = '✕';
-    delBtn.addEventListener('click', () => removePrompt(index));
+    delBtn.addEventListener('click', () => { removePrompt(index); autoSave(); });
     li.appendChild(delBtn);
   }
 
@@ -152,15 +177,24 @@ function addPrompt() {
   const input = document.getElementById('newPromptInput');
   const text = input.value.trim();
   if (!text) return;
-
-  customPrompts.unshift(text); // add to top
+  customPrompts.unshift(text);
+  // Shift defaultPromptIndex since we inserted at position 0
+  defaultPromptIndex += 1;
   input.value = '';
   renderPromptList();
+  renderDefaultPromptSelect();
 }
 
 function removePrompt(index) {
   customPrompts.splice(index, 1);
+  // Adjust defaultPromptIndex
+  if (defaultPromptIndex === index) {
+    defaultPromptIndex = 0;
+  } else if (defaultPromptIndex > index) {
+    defaultPromptIndex -= 1;
+  }
   renderPromptList();
+  renderDefaultPromptSelect();
 }
 
 function movePrompt(index, direction) {
@@ -169,7 +203,20 @@ function movePrompt(index, direction) {
   const temp = customPrompts[index];
   customPrompts[index] = customPrompts[newIndex];
   customPrompts[newIndex] = temp;
+  // Adjust defaultPromptIndex if it was one of the swapped items
+  if (defaultPromptIndex === index) {
+    defaultPromptIndex = newIndex;
+  } else if (defaultPromptIndex === newIndex) {
+    defaultPromptIndex = index;
+  }
   renderPromptList();
+  renderDefaultPromptSelect();
+}
+
+// Auto-save with debounce (300ms)
+function autoSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveSettings, 300);
 }
 
 function saveSettings() {
@@ -177,20 +224,22 @@ function saveSettings() {
   const autoSubmitVal = document.getElementById('autoSubmitToggle')?.checked ?? true;
   const includeUrlVal = document.getElementById('includeUrlToggle')?.checked ?? true;
   const maxCharsVal = parseInt(document.getElementById('maxCharsInput')?.value, 10) || 12000;
+  const quickSummarizeVal = document.getElementById('quickSummarizeToggle')?.checked ?? false;
 
   chrome.storage.sync.set({
     customPrompts,
     defaultProvider,
+    defaultPromptIndex,
+    lastProvider: defaultProvider,
+    lastPromptIndex: defaultPromptIndex,
     openMode: selectedMode,
     autoSubmit: autoSubmitVal,
     includeUrl: includeUrlVal,
     maxContentChars: maxCharsVal,
+    quickSummarize: quickSummarizeVal,
   }, () => {
-    // Also update the lastProvider if it matches what we're saving as default
-    chrome.storage.sync.set({ lastProvider: defaultProvider });
-
     const feedback = document.getElementById('saveFeedback');
     feedback.classList.add('visible');
-    setTimeout(() => feedback.classList.remove('visible'), 2500);
+    setTimeout(() => feedback.classList.remove('visible'), 1500);
   });
 }

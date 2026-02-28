@@ -5,6 +5,35 @@ import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
 
+// --- Context Menus ---
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'summarize-page',
+    title: 'Summarize This Page',
+    contexts: ['page', 'frame', 'selection', 'link'],
+  });
+  chrome.contextMenus.create({
+    id: 'open-settings',
+    title: 'AI Summarizer Settings',
+    contexts: ['page', 'frame', 'selection', 'link'],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'summarize-page') {
+    try {
+      const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
+      const provider = settings.defaultProvider || 'chatgpt';
+      const promptIndex = settings.defaultPromptIndex ?? 0;
+      await handleSummarize({ provider, promptIndex });
+    } catch (err) {
+      console.error('[AI Summarizer] Context menu summarize failed:', err);
+    }
+  } else if (info.menuItemId === 'open-settings') {
+    chrome.runtime.openOptionsPage();
+  }
+});
+
 // --- Restore main window when companion is closed ---
 chrome.windows.onRemoved.addListener(async (closedWindowId) => {
   try {
@@ -23,7 +52,7 @@ chrome.windows.onRemoved.addListener(async (closedWindowId) => {
         width: bounds.width,
         height: bounds.height,
         state: 'normal',
-      }).catch(() => {});
+      }).catch(() => { });
     }
   } catch { /* non-fatal */ }
 });
@@ -164,7 +193,7 @@ async function openCompanionWindow(url, sourceWindowId) {
   try {
     const stored = await chrome.storage.session.get(['companionWindowId']);
     if (stored.companionWindowId) {
-      await chrome.windows.remove(stored.companionWindowId).catch(() => {});
+      await chrome.windows.remove(stored.companionWindowId).catch(() => { });
       // Small delay to let the window close and onRemoved fire before we overwrite the saved bounds
       await new Promise((r) => setTimeout(r, 150));
       // Re-fetch currentWin in case onRemoved already restored it
