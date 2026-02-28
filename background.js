@@ -93,15 +93,20 @@ async function handleSummarize({ provider, promptIndex }) {
   let extractedContent;
 
   if (isYouTube) {
-    // Inject YouTube transcript extractor
+    // youtube.js runs in MAIN world and fetches the transcript directly
+    // using XHR (which bypasses YouTube's Service Worker and sends cookies).
     const results = await chrome.scripting.executeScript({
       target: { tabId: activeTab.id },
       files: ['content/youtube.js'],
+      world: 'MAIN',
     });
-    extractedContent = results[0]?.result;
-    if (!extractedContent) {
-      const title = activeTab.title || 'Unknown Video';
-      extractedContent = `YouTube Video: ${title}\nURL: ${tabUrl}\n\n[Could not extract transcript — please summarize based on the title and URL]`;
+    const result = results[0]?.result;
+    if (result?.content) {
+      extractedContent = result.content;
+    } else if (result?.error) {
+      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\nURL: ${tabUrl}\n\n[${result.error}]`;
+    } else {
+      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\nURL: ${tabUrl}\n\n[Could not extract transcript]`;
     }
   } else {
     // Inject Readability first (provides global Readability class), then extractor
@@ -269,3 +274,4 @@ async function writeToClipboard(text) {
     );
   });
 }
+
