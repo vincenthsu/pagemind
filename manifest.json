@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AI Page Summarizer",
+  "name": "PageMind",
   "version": "1.0.0",
   "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization.",
   "icons": {
@@ -11,7 +11,7 @@
   "action": {
     "default_popup": "popup.html",
     "default_icon": "icons/icon48.png",
-    "default_title": "AI Page Summarizer"
+    "default_title": "PageMind"
   },
   "options_ui": {
     "page": "options.html",
