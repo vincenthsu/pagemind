@@ -5,8 +5,44 @@ import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
 
+// --- Quick Summarize: dynamically toggle popup ---
+// When Quick Summarize is ON, we remove the popup so chrome.action.onClicked fires.
+// When OFF, we restore the popup so clicking the icon shows the normal UI.
+async function applyQuickSummarizeMode(enabled) {
+  await chrome.action.setPopup({ popup: enabled ? '' : 'popup.html' });
+}
+
+// Apply on startup
+chrome.storage.sync.get(['quickSummarize'], (data) => {
+  applyQuickSummarizeMode(!!data.quickSummarize);
+});
+
+// React to setting changes (from options page)
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes.quickSummarize) {
+    applyQuickSummarizeMode(!!changes.quickSummarize.newValue);
+  }
+});
+
+// Handle icon click when popup is disabled (Quick Summarize mode)
+chrome.action.onClicked.addListener(async () => {
+  try {
+    const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
+    const provider = settings.defaultProvider || 'chatgpt';
+    const promptIndex = settings.defaultPromptIndex ?? 0;
+    await handleSummarize({ provider, promptIndex });
+  } catch (err) {
+    console.error('[PageMind] Quick summarize failed:', err);
+  }
+});
+
 // --- Context Menus ---
 chrome.runtime.onInstalled.addListener(() => {
+  // Also apply quick summarize mode on install/update
+  chrome.storage.sync.get(['quickSummarize'], (data) => {
+    applyQuickSummarizeMode(!!data.quickSummarize);
+  });
+
   chrome.contextMenus.create({
     id: 'summarize-page',
     title: 'Summarize This Page',
