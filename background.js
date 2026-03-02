@@ -161,12 +161,13 @@ async function handleSummarize({ provider, promptIndex }) {
   }
 
   // Get the selected prompt and settings in one call
-  const settings = await chrome.storage.sync.get(['customPrompts', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars']);
+  const settings = await chrome.storage.sync.get(['customPrompts', 'customUrls', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars']);
   const allPrompts = [...(settings.customPrompts || []), ...DEFAULT_PROMPTS];
   const prompt = allPrompts[promptIndex] ?? DEFAULT_PROMPTS[0];
   const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
   const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
   const maxContentChars = settings.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
+  const customUrls = settings.customUrls || {};
 
   // Truncate content if needed
   const truncated = extractedContent.length > maxContentChars
@@ -199,11 +200,12 @@ async function handleSummarize({ provider, promptIndex }) {
 
   // Check open mode setting
   const openMode = settings.openMode || 'companion';
+  const finalUrl = customUrls[provider] || providerConfig.url;
 
   if (openMode === 'newtab') {
-    await chrome.tabs.create({ url: providerConfig.url, active: true });
+    await chrome.tabs.create({ url: finalUrl, active: true });
   } else {
-    await openCompanionWindow(providerConfig.url, activeTab.windowId);
+    await openCompanionWindow(finalUrl, activeTab.windowId);
   }
 
   return { success: true };

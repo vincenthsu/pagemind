@@ -413,6 +413,41 @@
       color: #888;
       flex-shrink: 0;
     }
+
+    /* URL input group */
+    .url-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .url-input-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .url-input-row label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+    }
+
+    .url-input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+      color: #333;
+    }
+
+    .url-input:focus {
+      border-color: #4882f4;
+    }
   </style>
 </head>
 
@@ -484,6 +519,31 @@
         <label for="maxCharsInput">Content character limit</label>
         <input type="number" class="number-input" id="maxCharsInput" value="12000" min="1000" max="100000" step="1000">
         <span class="input-suffix">chars</span>
+      </div>
+    </div>
+
+    <!-- Custom AI Provider URLs -->
+    <div class="card">
+      <div class="card-title">Custom AI Provider URLs</div>
+      <div class="card-desc">If you use a self-hosted instance or a custom endpoint, you can override the default AI provider URLs here. Leave empty to use the default URLs.</div>
+      
+      <div class="url-input-group">
+        <div class="url-input-row">
+          <label for="url-chatgpt">ChatGPT</label>
+          <input type="url" class="url-input" id="url-chatgpt" placeholder="https://chatgpt.com/">
+        </div>
+        <div class="url-input-row">
+          <label for="url-gemini">Gemini</label>
+          <input type="url" class="url-input" id="url-gemini" placeholder="https://gemini.google.com/app">
+        </div>
+        <div class="url-input-row">
+          <label for="url-claude">Claude</label>
+          <input type="url" class="url-input" id="url-claude" placeholder="https://claude.ai/new">
+        </div>
+        <div class="url-input-row">
+          <label for="url-grok">Grok</label>
+          <input type="url" class="url-input" id="url-grok" placeholder="https://grok.com/">
+        </div>
       </div>
     </div>
 
