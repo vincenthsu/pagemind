@@ -10,6 +10,7 @@ const DEFAULT_PROMPTS = [
 ];
 
 let customPrompts = [];
+let customUrls = {};
 let defaultProvider = 'chatgpt';
 let defaultPromptIndex = 0;
 let openMode = 'companion';
@@ -53,6 +54,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('quickSummarizeToggle').addEventListener('change', () => autoSave());
   document.getElementById('maxCharsInput').addEventListener('change', () => autoSave());
 
+  // URL input listeners
+  ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
+    document.getElementById(`url-${id}`).addEventListener('input', () => autoSave());
+  });
+
   document.getElementById('defaultPromptSelect').addEventListener('change', (e) => {
     defaultPromptIndex = parseInt(e.target.value, 10);
     autoSave();
@@ -61,9 +67,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function loadSettings() {
   chrome.storage.sync.get(
-    ['customPrompts', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
+    ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
     (data) => {
       customPrompts = data.customPrompts || [];
+      customUrls = data.customUrls || {};
       defaultProvider = data.defaultProvider || 'chatgpt';
       defaultPromptIndex = data.defaultPromptIndex ?? 0;
       openMode = data.openMode || 'companion';
@@ -75,6 +82,11 @@ function loadSettings() {
       updateProviderButtons();
       renderPromptList();
       renderDefaultPromptSelect();
+
+      // Populate custom URLs
+      ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
+        document.getElementById(`url-${id}`).value = customUrls[id] || '';
+      });
 
       const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
       if (radio) radio.checked = true;
@@ -226,8 +238,16 @@ function saveSettings() {
   const maxCharsVal = parseInt(document.getElementById('maxCharsInput')?.value, 10) || 12000;
   const quickSummarizeVal = document.getElementById('quickSummarizeToggle')?.checked ?? false;
 
+  // Collect custom URLs
+  const newCustomUrls = {};
+  ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
+    const val = document.getElementById(`url-${id}`).value.trim();
+    if (val) newCustomUrls[id] = val;
+  });
+
   chrome.storage.sync.set({
     customPrompts,
+    customUrls: newCustomUrls,
     defaultProvider,
     defaultPromptIndex,
     lastProvider: defaultProvider,
