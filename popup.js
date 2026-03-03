@@ -17,7 +17,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   renderPrompts();
   setupEventListeners();
+  await updateButtonLabel();
 });
+
+// Check if there's a selection on the active tab and update the button label
+async function updateButtonLabel() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: () => window.getSelection().toString().trim(),
+    });
+    const selected = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
+    const btn = document.getElementById('summarizeBtn');
+    if (selected.length > 0) {
+      btn.textContent = '✂️ Summarize Selection';
+    } else {
+      btn.textContent = 'Summarize This Page';
+    }
+  } catch {
+    // Non-fatal — leave default label
+  }
+}
 
 async function loadSettings() {
   return new Promise((resolve) => {
@@ -93,11 +115,30 @@ function setupEventListeners() {
 async function handleSummarize() {
   const promptIndex = parseInt(document.getElementById('promptSelect').value, 10);
 
-  setStatus('loading', '⏳ Extracting page content…');
+  // Check for selected text on the active tab before sending
+  let selectedText = '';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => window.getSelection().toString().trim(),
+      });
+      selectedText = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
+    }
+  } catch {
+    // Non-fatal — proceed without selection
+  }
+
+  if (selectedText.length > 0) {
+    setStatus('loading', '⏳ Sending selected text…');
+  } else {
+    setStatus('loading', '⏳ Extracting page content…');
+  }
   setButtonDisabled(true);
 
   chrome.runtime.sendMessage(
-    { type: 'SUMMARIZE', provider: selectedProvider, promptIndex },
+    { type: 'SUMMARIZE', provider: selectedProvider, promptIndex, selectedText },
     (response) => {
       if (chrome.runtime.lastError) {
         setStatus('error', '❌ Extension error: ' + chrome.runtime.lastError.message);
@@ -136,7 +177,12 @@ function setStatus(type, message) {
 function setButtonDisabled(disabled) {
   const btn = document.getElementById('summarizeBtn');
   btn.disabled = disabled;
-  btn.textContent = disabled ? 'Sending…' : 'Summarize This Page';
+  if (disabled) {
+    btn.textContent = 'Sending…';
+  } else {
+    // Restore correct label after operation
+    updateButtonLabel();
+  }
 }
 
 function showClipboardHint() {
