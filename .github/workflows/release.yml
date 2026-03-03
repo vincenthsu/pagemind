@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version from manifest
+        id: meta
+        run: |
+          VERSION=$(jq -r '.version' manifest.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package extension
+        run: |
+          zip -r pagemind-v${{ steps.meta.outputs.version }}.zip \
+            manifest.json \
+            background.js \
+            popup.html \
+            popup.js \
+            options.html \
+            options.js \
+            sidepanel.html \
+            sidepanel.js \
+            icons/ \
+            content/ \
+            injectors/ \
+            lib/ \
+            offscreen/ \
+            LICENSE
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PageMind v${{ steps.meta.outputs.version }}
+          body: |
+            ## 📦 Installation / 安裝方式
+
+            1. Download **`pagemind-v${{ steps.meta.outputs.version }}.zip`** below.
+            2. Unzip the file.
+            3. Open Chrome → `chrome://extensions/` → Enable **Developer mode**.
+            4. Click **Load unpacked** and select the unzipped folder.
+            5. Done! Pin PageMind to your toolbar 📌
+
+            ---
+
+            1. 下載下方的 **`pagemind-v${{ steps.meta.outputs.version }}.zip`**。
+            2. 解壓縮。
+            3. 開啟 Chrome → `chrome://extensions/` → 開啟**開發人員模式**。
+            4. 點擊**載入未封裝項目**，選取解壓縮後的資料夾。
+            5. 安裝完成！建議釘選到工具列 📌
+          files: pagemind-v${{ steps.meta.outputs.version }}.zip
+          generate_release_notes: true

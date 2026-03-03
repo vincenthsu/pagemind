@@ -33,16 +33,22 @@ PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube
 
 目前可透過載入未封裝擴充功能的方式安裝：
 
-1. 下載或 clone 此專案：
-   ```bash
-   git clone https://github.com/yourusername/pagemind.git
-   ```
-2. 開啟 Chrome，前往 `chrome://extensions/`
-3. 右上角開啟 **開發人員模式**
-4. 點擊 **載入未封裝項目**
-5. 選取 `pagemind` 資料夾
-6. 安裝完成！建議釘選到工具列以便隨時使用 📌
+### 方法一：下載 Release 壓縮檔（推薦）
+1. 前往 [Releases](https://github.com/vincenthsu/pagemind/releases) 頁面。
+2. 下載最新的 `pagemind-vX.X.X.zip` 壓縮檔。
+3. 將檔案完整解壓縮。
+4. 開啟 Chrome，前往 `chrome://extensions/`
+5. 右上角開啟 **開發人員模式**
+6. 點擊 **載入未封裝項目**
+7. 選取剛才解壓縮的資料夾
+8. 安裝完成！建議釘選到工具列以便隨時使用 📌
 
+### 方法二：Clone 專案（適合開發者）
+1. Clone 此專案：
+   ```bash
+   git clone https://github.com/vincenthsu/pagemind.git
+   ```
+2. 照著上述 4~8 的步驟，選取 clone 下來的資料夾即可安裝。
 ## 🎯 使用方式
 
 1. 瀏覽任何文章、新聞或 YouTube 影片
