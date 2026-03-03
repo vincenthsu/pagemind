@@ -61,7 +61,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
       const provider = settings.defaultProvider || 'chatgpt';
       const promptIndex = settings.defaultPromptIndex ?? 0;
-      await handleSummarize({ provider, promptIndex });
+      // Pass the right-click selection text if present
+      const selectedText = info.selectionText?.trim() || '';
+      await handleSummarize({ provider, promptIndex, selectedText });
     } catch (err) {
       console.error('[AI Summarizer] Context menu summarize failed:', err);
     }
@@ -115,7 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function handleSummarize({ provider, promptIndex }) {
+async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
   const providerConfig = PROVIDERS[provider];
   if (!providerConfig) throw new Error('Unknown provider: ' + provider);
 
@@ -127,8 +129,26 @@ async function handleSummarize({ provider, promptIndex }) {
   const isYouTube = tabUrl.includes('youtube.com/watch');
 
   let extractedContent;
+  let finalSelectedText = selectedText;
 
-  if (isYouTube) {
+  // If no selected text provided (e.g., Quick Summarize or just button click), try to grab it dynamically across all frames
+  if (!finalSelectedText) {
+    try {
+      const selResults = await chrome.scripting.executeScript({
+        target: { tabId: activeTab.id, allFrames: true },
+        func: () => window.getSelection().toString().trim(),
+      });
+      // Combine selections if any frame had text selected
+      finalSelectedText = selResults.map(r => r.result).filter(Boolean).join('\n\n').trim();
+    } catch (e) {
+      // Ignored
+    }
+  }
+
+  if (finalSelectedText.length > 0) {
+    // User highlighted text — use it directly, skip full page extraction
+    extractedContent = `[Selected text from: ${activeTab.title || tabUrl}]\n\n${finalSelectedText}`;
+  } else if (isYouTube) {
     // youtube.js runs in MAIN world and fetches the transcript directly
     // using XHR (which bypasses YouTube's Service Worker and sends cookies).
     const results = await chrome.scripting.executeScript({
