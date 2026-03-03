@@ -33,16 +33,22 @@ PageMind is a Chrome extension that **extracts the core content** of any webpage
 
 The extension can be installed by loading it as an unpacked extension in Chrome:
 
+### Method 1: Download from Release (Recommended)
+1. Go to the [Releases](https://github.com/vincenthsu/pagemind/releases) page.
+2. Download the latest `pagemind-vX.X.X.zip` file.
+3. Unzip the downloaded file.
+4. Open Chrome and go to `chrome://extensions/`
+5. Enable **Developer mode** (toggle in the top-right corner)
+6. Click **Load unpacked**
+7. Select the unzipped `pagemind` folder
+8. Done! Pin it to your toolbar for quick access 📌
+
+### Method 2: Clone Repository (For Developers)
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/pagemind.git
+   git clone https://github.com/vincenthsu/pagemind.git
    ```
-2. Open Chrome and go to `chrome://extensions/`
-3. Enable **Developer mode** (toggle in the top-right corner)
-4. Click **Load unpacked**
-5. Select the `pagemind` folder
-6. Done! Pin it to your toolbar for quick access 📌
-
+2. Follow steps 4-8 from above, selecting the cloned folder.
 ## 🎯 Usage
 
 1. Navigate to any article, webpage, or YouTube video
