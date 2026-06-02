@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PageMind",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization.",
   "icons": {
     "16": "icons/icon16.png",

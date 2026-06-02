@@ -1,13 +1,6 @@
 // Popup script — handles provider selection, prompt selection, and summarize action
 
-const DEFAULT_PROMPTS = [
-  'Summarize the following content in 5 bullet points:',
-  'What are the key takeaways from this content?',
-  'Explain this to me like I\'m 5 years old:',
-  'Extract all action items and decisions from this content:',
-  'Write a critical analysis of:',
-  'Translate the following content to Traditional Chinese and summarize:',
-];
+import { DEFAULT_PROMPTS } from './lib/providers.js';
 
 let selectedProvider = 'chatgpt';
 let allPrompts = [];
