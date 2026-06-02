@@ -16,7 +16,7 @@
     if (!videoId) return { error: 'No video ID found' };
 
     const videoTitle = document.title.replace(/ - YouTube$/, '').trim();
-    const header = `YouTube Video: ${videoTitle}\nURL: ${location.href}\n\n`;
+    const header = `YouTube Video: ${videoTitle}\n\n`;
 
     // --- Step 1: Get INNERTUBE_API_KEY from the page ---
     let apiKey = null;
@@ -67,7 +67,7 @@
     }
 
     if (!captionTracks || captionTracks.length === 0) {
-      return { content: header + '[No captions/transcript available for this video]' };
+      return { content: header.trim() };
     }
 
     // --- Step 3: Pick best track (prefer manual over ASR) ---

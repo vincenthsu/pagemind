@@ -160,9 +160,9 @@ async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
     if (result?.content) {
       extractedContent = result.content;
     } else if (result?.error) {
-      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\nURL: ${tabUrl}\n\n[${result.error}]`;
+      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\n\n[${result.error}]`;
     } else {
-      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\nURL: ${tabUrl}\n\n[Could not extract transcript]`;
+      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\n\n[Could not extract transcript]`;
     }
   } else {
     // Inject Readability first (provides global Readability class), then extractor
@@ -176,7 +176,7 @@ async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
     });
     extractedContent = results[0]?.result;
     if (!extractedContent) {
-      extractedContent = `Page: ${activeTab.title}\nURL: ${tabUrl}\n\n[Could not extract page content]`;
+      extractedContent = `Page: ${activeTab.title}\n\n[Could not extract page content]`;
     }
   }
 
