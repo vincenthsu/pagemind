@@ -65,7 +65,8 @@
       }, (response) => {
         void runtime.lastError;
         if (registrationId !== activeRegistrationId) return;
-        if (!isValidDelivery(response?.payloadId, response?.payload)) {
+        const payload = response?.payload;
+        if (!isValidDelivery(payload?.id, payload)) {
           retryForRegistration(activeRegistrationId, retries, (remaining) => {
             requestTabPayload(activeRegistrationId, remaining);
           });
@@ -73,8 +74,8 @@
         }
         void deliverPayload(
           activeRegistrationId,
-          response.payloadId,
-          response.payload,
+          payload.id,
+          payload,
           payloadHandler,
         );
       });

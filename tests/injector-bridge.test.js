@@ -120,8 +120,8 @@ test('publishes the bridge before runtime APIs are available and retries after 4
 });
 
 test('top-level registration requests and delivers an explicitly identified runtime payload', async () => {
-  const payload = { text: 'Summarize this' };
-  const harness = await createHarness({ responses: [{ payloadId: 'tab-1', payload }] });
+  const payload = { id: 'tab-1', text: 'Summarize this' };
+  const harness = await createHarness({ responses: [{ payload }] });
   const delivered = [];
 
   harness.bridge.register('chatgpt', async (value) => delivered.push(value));
@@ -135,11 +135,12 @@ test('top-level registration requests and delivers an explicitly identified runt
 });
 
 test('runtime delivery rejects malformed IDs and payloads and retries every 400ms', async () => {
-  const payload = { text: 'Valid' };
+  const payload = { id: 'tab-valid', text: 'Valid' };
   const harness = await createHarness({ responses: [
-    { payloadId: 42, payload: {} },
-    { payloadId: 'bad-payload', payload: null },
-    { payloadId: 'tab-valid', payload },
+    { payload: { id: 42 } },
+    { payload: null },
+    { payload: 'not an object' },
+    { payload },
   ] });
   const delivered = [];
 
@@ -148,10 +149,12 @@ test('runtime delivery rejects malformed IDs and payloads and retries every 400m
   harness.timers[0].callback();
   assert.equal(harness.timers[1].delay, 400);
   harness.timers[1].callback();
+  assert.equal(harness.timers[2].delay, 400);
+  harness.timers[2].callback();
   await Promise.resolve();
 
   assert.deepEqual(delivered, [payload]);
-  assert.equal(harness.runtimeMessages.length, 3);
+  assert.equal(harness.runtimeMessages.length, 4);
 });
 
 test('direct panel child announces PANEL_READY only after DOMContentLoaded', async () => {
