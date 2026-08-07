@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PageMind",
-  "version": "1.0.1",
+  "version": "1.1.0",
+  "minimum_chrome_version": "114",
   "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization.",
   "icons": {
     "16": "icons/icon16.png",
@@ -9,9 +10,11 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_icon": "icons/icon48.png",
     "default_title": "PageMind"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "options_ui": {
     "page": "options.html",
@@ -29,8 +32,13 @@
     "clipboardWrite",
     "tabs",
     "windows",
-    "contextMenus"
+    "contextMenus",
+    "sidePanel",
+    "declarativeNetRequestWithHostAccess"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https:;"
+  },
   "host_permissions": [
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
@@ -47,36 +55,44 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "injectors/bridge.js",
         "injectors/chatgpt.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": [
         "https://gemini.google.com/*"
       ],
       "js": [
+        "injectors/bridge.js",
         "injectors/gemini.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": [
         "https://claude.ai/*"
       ],
       "js": [
+        "injectors/bridge.js",
         "injectors/claude.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": [
         "https://grok.com/*"
       ],
       "js": [
+        "injectors/bridge.js",
         "injectors/grok.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": [
@@ -86,6 +102,7 @@
         "injectors/grok-main.js"
       ],
       "run_at": "document_idle",
+      "all_frames": true,
       "world": "MAIN"
     }
   ],
