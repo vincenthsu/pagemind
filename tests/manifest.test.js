@@ -57,6 +57,11 @@ test('runs the Grok main-world injector in every frame', () => {
     ({ world }) => world === 'MAIN',
   );
 
-  assert.equal(grokMain.all_frames, true);
-  assert.deepEqual(grokMain.js, ['injectors/grok-main.js']);
+  assert.deepEqual(grokMain, {
+    matches: ['https://grok.com/*'],
+    js: ['injectors/grok-main.js'],
+    run_at: 'document_idle',
+    all_frames: true,
+    world: 'MAIN',
+  });
 });
