@@ -69,7 +69,7 @@ test('custom registrations add isolated scripts, a Grok MAIN script, and no buil
     {
       id: 'pagemind-custom-chatgpt-isolated',
       matches: ['https://custom.example.com/*'],
-      js: ['bridge.js', 'chatgpt-injector.js'],
+      js: ['injectors/bridge.js', 'injectors/chatgpt.js'],
       allFrames: true,
       runAt: 'document_idle',
       persistAcrossSessions: true,
@@ -78,7 +78,7 @@ test('custom registrations add isolated scripts, a Grok MAIN script, and no buil
     {
       id: 'pagemind-custom-grok-isolated',
       matches: ['https://grok-custom.example.com/*'],
-      js: ['bridge.js', 'grok-injector.js'],
+      js: ['injectors/bridge.js', 'injectors/grok.js'],
       allFrames: true,
       runAt: 'document_idle',
       persistAcrossSessions: true,
@@ -87,7 +87,7 @@ test('custom registrations add isolated scripts, a Grok MAIN script, and no buil
     {
       id: 'pagemind-custom-grok-main',
       matches: ['https://grok-custom.example.com/*'],
-      js: ['grok-main.js'],
+      js: ['injectors/grok-main.js'],
       allFrames: true,
       runAt: 'document_idle',
       persistAcrossSessions: true,
