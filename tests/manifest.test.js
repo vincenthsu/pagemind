@@ -7,13 +7,16 @@ const manifest = JSON.parse(
 );
 
 test('declares the native Side Panel contract', () => {
-  assert.equal(manifest.minimum_chrome_version, '114');
+  assert.equal(manifest.version, '1.1.0');
+  assert.equal(manifest.minimum_chrome_version, '116');
   assert.deepEqual(manifest.side_panel, { default_path: 'sidepanel.html' });
   assert.ok(manifest.permissions.includes('sidePanel'));
   assert.ok(manifest.permissions.includes('declarativeNetRequestWithHostAccess'));
   assert.equal(manifest.action.default_popup, undefined);
-  assert.match(manifest.content_security_policy.extension_pages, /frame-src https:/);
-  assert.doesNotMatch(manifest.content_security_policy.extension_pages, /unsafe-eval/);
+  assert.equal(
+    manifest.content_security_policy.extension_pages,
+    "script-src 'self'; object-src 'self'; frame-src https:;",
+  );
 });
 
 test('injects the bridge into every isolated provider frame', () => {
@@ -21,11 +24,32 @@ test('injects the bridge into every isolated provider frame', () => {
     ({ world }) => world !== 'MAIN',
   );
 
-  assert.equal(isolatedScripts.length, 4);
-  for (const script of isolatedScripts) {
-    assert.equal(script.all_frames, true);
-    assert.equal(script.js[0], 'injectors/bridge.js');
-  }
+  assert.deepEqual(isolatedScripts, [
+    {
+      matches: ['https://chat.openai.com/*', 'https://chatgpt.com/*'],
+      js: ['injectors/bridge.js', 'injectors/chatgpt.js'],
+      run_at: 'document_idle',
+      all_frames: true,
+    },
+    {
+      matches: ['https://gemini.google.com/*'],
+      js: ['injectors/bridge.js', 'injectors/gemini.js'],
+      run_at: 'document_idle',
+      all_frames: true,
+    },
+    {
+      matches: ['https://claude.ai/*'],
+      js: ['injectors/bridge.js', 'injectors/claude.js'],
+      run_at: 'document_idle',
+      all_frames: true,
+    },
+    {
+      matches: ['https://grok.com/*'],
+      js: ['injectors/bridge.js', 'injectors/grok.js'],
+      run_at: 'document_idle',
+      all_frames: true,
+    },
+  ]);
 });
 
 test('runs the Grok main-world injector in every frame', () => {
