@@ -27,12 +27,14 @@
     };
 
     try {
-      chrome.runtime.sendMessage({
+      const message = {
         type: 'GET_PAYLOAD',
         provider: requestProvider,
         context: isTopLevel ? 'tab' : 'sidepanel',
-        windowId,
-      }, async (response) => {
+      };
+      if (!isTopLevel) message.windowId = windowId;
+
+      chrome.runtime.sendMessage(message, async (response) => {
         void chrome.runtime.lastError;
         if (registrationId !== requestRegistration) return;
         const payload = response?.payload;

@@ -76,8 +76,8 @@ test('top-level registration immediately requests its tab payload', async () => 
     type: 'GET_PAYLOAD',
     provider: 'chatgpt',
     context: 'tab',
-    windowId: undefined,
   }]);
+  assert.equal(Object.hasOwn(harness.messages[0], 'windowId'), false);
   assert.deepEqual(delivered, [{ id: 'payload-1', text: 'Hello' }]);
   assert.equal(Object.isFrozen(harness.bridge), true);
 });
