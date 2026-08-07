@@ -35,14 +35,12 @@ let pendingPayloadMutation = Promise.resolve();
 async function applyToolbarAction(settings = {}) {
   const toolbarAction = resolveToolbarAction(settings);
   const config = getToolbarChromeConfig(toolbarAction);
-  const openPanelOnActionClick = config.openPanelOnActionClick
-    || (config.directSummarize && normalizeOpenMode(settings.openMode) === 'sidepanel');
   cachedToolbarSettings = { ...(cachedToolbarSettings || {}), ...settings, toolbarAction };
 
   await Promise.all([
     chrome.action.setPopup({ popup: config.popup }),
     chrome.sidePanel.setPanelBehavior({
-      openPanelOnActionClick,
+      openPanelOnActionClick: config.openPanelOnActionClick,
     }),
   ]);
 
@@ -126,13 +124,25 @@ function startDirectSummaryFromAction(tab, settings) {
 
   const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
   const destination = normalizeOpenMode(settings.openMode);
-  void handleSummarize({
+  let panelOpen = Promise.resolve();
+  if (destination === 'sidepanel') {
+    try {
+      panelOpen = chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      });
+    } catch (error) {
+      console.error('[PageMind] Direct summarize failed:', error);
+      return;
+    }
+  }
+
+  void panelOpen.then(() => handleSummarize({
     provider: settings.defaultProvider || 'chatgpt',
     promptIndex: settings.defaultPromptIndex ?? 0,
     sourceWindowId,
     source: 'toolbar',
     destination,
-  }).catch((error) => {
+  })).catch((error) => {
     console.error('[PageMind] Direct summarize failed:', error);
   });
 }
@@ -143,9 +153,15 @@ chrome.action.onClicked.addListener((tab) => {
     return;
   }
 
-  void chrome.storage.sync.get(TOOLBAR_SETTING_KEYS)
-    .then((settings) => startDirectSummaryFromAction(tab, settings))
-    .catch((error) => console.error('[PageMind] Toolbar settings failed:', error));
+  // Chrome extension API callbacks inherit the user gesture present when the
+  // API was invoked, so this cold-worker lookup must start inside onClicked.
+  chrome.storage.sync.get(TOOLBAR_SETTING_KEYS, (settings) => {
+    if (chrome.runtime.lastError) {
+      console.error('[PageMind] Toolbar settings failed:', chrome.runtime.lastError.message);
+      return;
+    }
+    startDirectSummaryFromAction(tab, settings);
+  });
 });
 
 // --- Context Menus ---

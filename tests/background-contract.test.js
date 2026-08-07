@@ -40,6 +40,7 @@ function createChrome({
   window = { id: 7, left: 0, top: 0, width: 1400, height: 900 },
   deferFirstSyncGet = false,
   enforceUserActivation = false,
+  asyncSyncCallbacks = false,
 } = {}) {
   const calls = [];
   const syncData = { ...sync };
@@ -57,6 +58,7 @@ function createChrome({
   let syncGetCount = 0;
   let releaseFirstSyncGet;
   let userActivation = false;
+  let openPanelOnActionClick = false;
 
   function storageArea(name, data) {
     return {
@@ -69,7 +71,18 @@ function createChrome({
           });
         }
         if (callback) {
-          callback(result);
+          const callbackActivation = userActivation;
+          const invokeCallback = () => {
+            const previousActivation = userActivation;
+            userActivation = callbackActivation;
+            try {
+              callback(result);
+            } finally {
+              userActivation = previousActivation;
+            }
+          };
+          if (name === 'sync' && asyncSyncCallbacks) queueMicrotask(invokeCallback);
+          else invokeCallback();
           return undefined;
         }
         return Promise.resolve(result);
@@ -168,6 +181,7 @@ function createChrome({
         calls.push({ type: 'sidePanel.open', value });
       },
       async setPanelBehavior(value) {
+        openPanelOnActionClick = value.openPanelOnActionClick;
         calls.push({ type: 'sidePanel.setPanelBehavior', value });
       },
     },
@@ -220,6 +234,14 @@ function createChrome({
     events,
     sessionData,
     syncData,
+    clickAction(tab) {
+      if (openPanelOnActionClick) {
+        calls.push({ type: 'sidePanel.autoOpen', value: { windowId: tab.windowId } });
+        return false;
+      }
+      this.withUserActivation(() => events.actionClicked.listener(tab));
+      return true;
+    },
     releaseFirstSyncGet() {
       assert.equal(typeof releaseFirstSyncGet, 'function');
       releaseFirstSyncGet();
@@ -255,13 +277,13 @@ async function sendRuntimeMessage(harness, message, sender = {}) {
   });
 }
 
-test('initialization migrates legacy toolbar settings and lets Chrome auto-open direct side-panel summaries', async () => {
+test('toolbar panel behavior suppresses clicks only for the dedicated side-panel action', async () => {
   const harness = createChrome({ sync: { quickSummarize: true, openMode: 'sidepanel' } });
   await loadBackground(harness);
 
   assert.deepEqual(callOf(harness, 'action.setPopup').at(-1).value, { popup: '' });
   assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
-    openPanelOnActionClick: true,
+    openPanelOnActionClick: false,
   });
   assert.equal(harness.syncData.toolbarAction, 'summarize');
 
@@ -287,7 +309,7 @@ test('initialization migrates legacy toolbar settings and lets Chrome auto-open 
   await harness.events.storageChanged.emit({ openMode: { newValue: 'sidepanel' } }, 'sync');
   await tick();
   assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
-    openPanelOnActionClick: true,
+    openPanelOnActionClick: false,
   });
 });
 
@@ -696,8 +718,9 @@ test('companion fallback still stores against the exact provider tab it creates'
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'tab', tabId: 800 });
 });
 
-test('toolbar direct-summary relies on Chrome auto-open and still targets the clicked window panel', async () => {
+test('dedicated side-panel action suppresses clicks while direct summarize dispatches and opens', async () => {
   const harness = createChrome({
+    enforceUserActivation: true,
     sync: {
       toolbarAction: 'sidepanel', defaultProvider: 'chatgpt', defaultPromptIndex: 0,
       openMode: 'sidepanel', includeUrl: false,
@@ -708,7 +731,7 @@ test('toolbar direct-summary relies on Chrome auto-open and still targets the cl
   harness.calls.length = 0;
 
   globalThis.chrome = harness.chrome;
-  await harness.events.actionClicked.listener({ id: 71, windowId: 44 });
+  assert.equal(harness.clickAction({ id: 71, windowId: 44 }), false);
   assert.equal(callOf(harness, 'sidePanel.open').length, 0);
   assert.equal(callOf(harness, 'tabs.query').length, 0);
 
@@ -716,20 +739,21 @@ test('toolbar direct-summary relies on Chrome auto-open and still targets the cl
   await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'summarize' } }, 'sync');
   await tick();
   assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
-    openPanelOnActionClick: true,
+    openPanelOnActionClick: false,
   });
   harness.calls.length = 0;
-  await harness.events.actionClicked.listener({ id: 71, windowId: 44 });
+  assert.equal(harness.clickAction({ id: 71, windowId: 44 }), true);
+  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 44 });
   await tick();
   await tick();
-  assert.equal(callOf(harness, 'sidePanel.open').length, 0);
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'sidepanel', windowId: 44 });
 });
 
-test('a cold-worker toolbar click summarizes without a late manual panel open', async () => {
+test('a cold-worker Chrome storage callback preserves activation for direct side-panel summarize', async () => {
   const harness = createChrome({
     deferFirstSyncGet: true,
     enforceUserActivation: true,
+    asyncSyncCallbacks: true,
     sync: {
       toolbarAction: 'summarize', defaultProvider: 'chatgpt', defaultPromptIndex: 0,
       openMode: 'sidepanel', includeUrl: false,
@@ -740,7 +764,7 @@ test('a cold-worker toolbar click summarizes without a late manual panel open', 
   harness.calls.length = 0;
 
   globalThis.chrome = harness.chrome;
-  harness.withUserActivation(() => harness.events.actionClicked.listener({ id: 72, windowId: 45 }));
+  assert.equal(harness.clickAction({ id: 72, windowId: 45 }), true);
   await tick();
   await tick();
   await tick();
@@ -749,7 +773,7 @@ test('a cold-worker toolbar click summarizes without a late manual panel open', 
   assert.deepEqual(gestureLookup.keys, [
     'toolbarAction', 'quickSummarize', 'defaultProvider', 'defaultPromptIndex', 'openMode',
   ]);
-  assert.equal(callOf(harness, 'sidePanel.open').length, 0);
+  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 45 });
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'sidepanel', windowId: 45 });
   harness.releaseFirstSyncGet();
 });
