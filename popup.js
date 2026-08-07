@@ -1,9 +1,12 @@
 // Popup script — handles provider selection, prompt selection, and summarize action
 
 import { DEFAULT_PROMPTS } from './lib/providers.js';
+import { normalizeOpenMode } from './lib/settings.js';
 
 let selectedProvider = 'chatgpt';
 let allPrompts = [];
+let openMode = 'companion';
+let sourceWindowId = null;
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -18,6 +21,7 @@ async function updateButtonLabel() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
+    if (Number.isInteger(tab.windowId)) sourceWindowId = tab.windowId;
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => window.getSelection().toString().trim(),
@@ -37,7 +41,7 @@ async function updateButtonLabel() {
 async function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['lastProvider', 'lastPromptIndex', 'customPrompts'],
+      ['lastProvider', 'lastPromptIndex', 'customPrompts', 'openMode'],
       (data) => {
         if (data.lastProvider) {
           selectedProvider = data.lastProvider;
@@ -45,6 +49,7 @@ async function loadSettings() {
 
         const customPrompts = data.customPrompts || [];
         allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
+        openMode = normalizeOpenMode(data.openMode);
 
         // Restore last prompt index (bounded to current list length)
         const lastIndex = Math.min(
@@ -106,59 +111,75 @@ function setupEventListeners() {
 }
 
 async function handleSummarize() {
-  const promptIndex = parseInt(document.getElementById('promptSelect').value, 10);
-
-  // Check for selected text on the active tab before sending
-  let selectedText = '';
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: () => window.getSelection().toString().trim(),
+    if (openMode === 'sidepanel') {
+      await chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
       });
-      selectedText = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
     }
-  } catch {
-    // Non-fatal — proceed without selection
-  }
 
-  if (selectedText.length > 0) {
-    setStatus('loading', '⏳ Sending selected text…');
-  } else {
-    setStatus('loading', '⏳ Extracting page content…');
-  }
-  setButtonDisabled(true);
-
-  chrome.runtime.sendMessage(
-    { type: 'SUMMARIZE', provider: selectedProvider, promptIndex, selectedText },
-    (response) => {
-      if (chrome.runtime.lastError) {
-        setStatus('error', '❌ Extension error: ' + chrome.runtime.lastError.message);
-        setButtonDisabled(false);
-        return;
+    const promptIndex = parseInt(document.getElementById('promptSelect').value, 10);
+    let selectedText = '';
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        if (Number.isInteger(tab.windowId)) sourceWindowId = tab.windowId;
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          func: () => window.getSelection().toString().trim(),
+        });
+        selectedText = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
       }
-
-      if (response?.error) {
-        setStatus('error', '❌ ' + response.error);
-        setButtonDisabled(false);
-        return;
-      }
-
-      if (response?.success) {
-        const providerLabels = {
-          chatgpt: 'ChatGPT',
-          gemini: 'Gemini',
-          claude: 'Claude',
-          grok: 'Grok',
-        };
-        setStatus('success', `✅ Sent to ${providerLabels[selectedProvider] || selectedProvider}`);
-        showClipboardHint();
-        // Close popup after short delay
-        setTimeout(() => window.close(), 1500);
-      }
+    } catch {
+      // Selection access is best-effort; background extraction can still proceed.
     }
-  );
+
+    if (selectedText.length > 0) {
+      setStatus('loading', '⏳ Sending selected text…');
+    } else {
+      setStatus('loading', '⏳ Extracting page content…');
+    }
+    setButtonDisabled(true);
+
+    chrome.runtime.sendMessage(
+      {
+        type: 'SUMMARIZE',
+        provider: selectedProvider,
+        promptIndex,
+        selectedText,
+        sourceWindowId,
+        destination: openMode,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          setStatus('error', '❌ Extension error: ' + chrome.runtime.lastError.message);
+          setButtonDisabled(false);
+          return;
+        }
+
+        if (response?.error) {
+          setStatus('error', '❌ ' + response.error);
+          setButtonDisabled(false);
+          return;
+        }
+
+        if (response?.success) {
+          const providerLabels = {
+            chatgpt: 'ChatGPT',
+            gemini: 'Gemini',
+            claude: 'Claude',
+            grok: 'Grok',
+          };
+          setStatus('success', `✅ Sent to ${providerLabels[selectedProvider] || selectedProvider}`);
+          showClipboardHint();
+          setTimeout(() => window.close(), 1500);
+        }
+      },
+    );
+  } catch (error) {
+    setStatus('error', `❌ ${error?.message || String(error)}`);
+    setButtonDisabled(false);
+  }
 }
 
 function setStatus(type, message) {
