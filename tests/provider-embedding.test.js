@@ -6,6 +6,7 @@ import {
   buildEmbeddingRules,
   CUSTOM_SCRIPT_IDS,
   isValidCustomProviderUrl,
+  PROVIDER_HOSTS,
   resolveProviderUrl,
 } from '../lib/provider-embedding.js';
 
@@ -102,4 +103,29 @@ test('custom registrations add isolated scripts, a Grok MAIN script, and no buil
     'pagemind-custom-grok-main',
   ]);
   assert.equal(Object.isFrozen(CUSTOM_SCRIPT_IDS), true);
+});
+
+test('foreign built-in custom hosts fall back without dynamic registrations', () => {
+  const customUrls = { claude: 'https://chatgpt.com/alternate' };
+
+  assert.equal(resolveProviderUrl('claude', customUrls), 'https://claude.ai/new');
+  assert.deepEqual(buildCustomContentScriptRegistrations(customUrls), []);
+  assert.equal(resolveProviderUrl('chatgpt', { chatgpt: 'https://chatgpt.com/alternate' }), 'https://chatgpt.com/alternate');
+  assert.deepEqual(buildCustomContentScriptRegistrations({ chatgpt: 'https://chatgpt.com/alternate' }), []);
+});
+
+test('duplicate non-built-in custom hosts fall back for every conflicting provider', () => {
+  const customUrls = {
+    chatgpt: 'https://shared-custom.example.com/chat',
+    gemini: 'https://shared-custom.example.com/app',
+  };
+
+  assert.equal(resolveProviderUrl('chatgpt', customUrls), 'https://chatgpt.com/');
+  assert.equal(resolveProviderUrl('gemini', customUrls), 'https://gemini.google.com/app');
+  assert.deepEqual(buildCustomContentScriptRegistrations(customUrls), []);
+});
+
+test('PROVIDER_HOSTS is immutable', () => {
+  assert.equal(Object.isFrozen(PROVIDER_HOSTS), true);
+  assert.equal(Object.values(PROVIDER_HOSTS).every(Object.isFrozen), true);
 });
