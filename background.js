@@ -30,16 +30,19 @@ const TOOLBAR_SETTING_KEYS = [
 let cachedToolbarSettings = null;
 const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']);
 const pendingPayloadClaims = new Set();
+let pendingPayloadMutation = Promise.resolve();
 
 async function applyToolbarAction(settings = {}) {
   const toolbarAction = resolveToolbarAction(settings);
   const config = getToolbarChromeConfig(toolbarAction);
+  const openPanelOnActionClick = config.openPanelOnActionClick
+    || (config.directSummarize && normalizeOpenMode(settings.openMode) === 'sidepanel');
   cachedToolbarSettings = { ...(cachedToolbarSettings || {}), ...settings, toolbarAction };
 
   await Promise.all([
     chrome.action.setPopup({ popup: config.popup }),
     chrome.sidePanel.setPanelBehavior({
-      openPanelOnActionClick: config.openPanelOnActionClick,
+      openPanelOnActionClick,
     }),
   ]);
 
@@ -102,10 +105,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
   }
 
-  if (changes.toolbarAction || changes.quickSummarize) {
+  if (changes.toolbarAction || changes.quickSummarize || changes.openMode) {
     void chrome.storage.sync.get(TOOLBAR_SETTING_KEYS)
       .then(applyToolbarAction)
       .catch((error) => console.error('[PageMind] Toolbar update failed:', error));
+  }
+  if (changes.openMode) {
+    void createContextMenus(changes.openMode.newValue)
+      .catch((error) => console.error('[PageMind] Context menu update failed:', error));
   }
   if (changes.customUrls) {
     void syncEmbeddingConfiguration(changes.customUrls.newValue || {})
@@ -119,28 +126,13 @@ function startDirectSummaryFromAction(tab, settings) {
 
   const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
   const destination = normalizeOpenMode(settings.openMode);
-  let panelOpen;
-  try {
-    panelOpen = destination === 'sidepanel'
-      ? chrome.sidePanel.open({
-        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
-      })
-      : Promise.resolve();
-  } catch (error) {
-    console.error('[PageMind] Direct summarize failed:', error);
-    return;
-  }
-
-  void (async () => {
-    await panelOpen;
-    await handleSummarize({
-      provider: settings.defaultProvider || 'chatgpt',
-      promptIndex: settings.defaultPromptIndex ?? 0,
-      sourceWindowId,
-      source: 'toolbar',
-      destination,
-    });
-  })().catch((error) => {
+  void handleSummarize({
+    provider: settings.defaultProvider || 'chatgpt',
+    promptIndex: settings.defaultPromptIndex ?? 0,
+    sourceWindowId,
+    source: 'toolbar',
+    destination,
+  }).catch((error) => {
     console.error('[PageMind] Direct summarize failed:', error);
   });
 }
@@ -151,18 +143,29 @@ chrome.action.onClicked.addListener((tab) => {
     return;
   }
 
-  // This lookup must start inside the click listener so Chrome carries the
-  // user gesture into its completion callback for sidePanel.open().
   void chrome.storage.sync.get(TOOLBAR_SETTING_KEYS)
     .then((settings) => startDirectSummaryFromAction(tab, settings))
     .catch((error) => console.error('[PageMind] Toolbar settings failed:', error));
 });
 
 // --- Context Menus ---
-async function createContextMenus() {
+const SUMMARY_MENU_DESTINATIONS = new Map([
+  ['summarize-page-sidepanel', 'sidepanel'],
+  ['summarize-page-companion', 'companion'],
+  ['summarize-page-newtab', 'newtab'],
+]);
+
+async function createContextMenus(configuredOpenMode) {
+  let destination = configuredOpenMode;
+  if (destination === undefined) {
+    const settings = await chrome.storage.sync.get(['openMode']);
+    destination = settings.openMode;
+  }
+  destination = normalizeOpenMode(destination);
+
   await chrome.contextMenus.removeAll();
   chrome.contextMenus.create({
-    id: 'summarize-page',
+    id: `summarize-page-${destination}`,
     title: 'Summarize This Page',
     contexts: ['page', 'frame', 'selection', 'link'],
   });
@@ -187,32 +190,14 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+async function summarizeFromContextMenu(info, tab, destination, panelOpen) {
   try {
     const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
-    if (info?.menuItemId === 'open-side-panel') {
-      await chrome.sidePanel.open({
-        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
-      });
-      return;
-    }
-    if (info?.menuItemId === 'open-settings') {
-      await chrome.runtime.openOptionsPage();
-      return;
-    }
-    if (info?.menuItemId !== 'summarize-page') return;
-
+    await panelOpen;
     const settings = await chrome.storage.sync.get([
       'defaultProvider',
       'defaultPromptIndex',
-      'openMode',
     ]);
-    const destination = normalizeOpenMode(settings.openMode);
-    if (destination === 'sidepanel') {
-      await chrome.sidePanel.open({
-        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
-      });
-    }
     await handleSummarize({
       provider: settings.defaultProvider || 'chatgpt',
       promptIndex: settings.defaultPromptIndex ?? 0,
@@ -224,6 +209,41 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   } catch (error) {
     console.error('[PageMind] Context menu action failed:', error);
   }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+  if (info?.menuItemId === 'open-side-panel') {
+    try {
+      void chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      }).catch((error) => console.error('[PageMind] Side panel open failed:', error));
+    } catch (error) {
+      console.error('[PageMind] Side panel open failed:', error);
+    }
+    return;
+  }
+  if (info?.menuItemId === 'open-settings') {
+    void chrome.runtime.openOptionsPage()
+      .catch((error) => console.error('[PageMind] Settings open failed:', error));
+    return;
+  }
+
+  const destination = SUMMARY_MENU_DESTINATIONS.get(info?.menuItemId);
+  if (!destination) return;
+
+  let panelOpen = Promise.resolve();
+  if (destination === 'sidepanel') {
+    try {
+      panelOpen = chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      });
+    } catch (error) {
+      console.error('[PageMind] Context menu action failed:', error);
+      return;
+    }
+  }
+  void summarizeFromContextMenu(info, tab, destination, panelOpen);
 });
 
 // --- Restore main window when companion is closed ---
@@ -255,6 +275,36 @@ function sendAsyncResponse(promise, sendResponse) {
   return true;
 }
 
+function serializePendingPayloadMutation(operation) {
+  const result = pendingPayloadMutation.then(operation, operation);
+  pendingPayloadMutation = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function storePendingPayload(payload) {
+  return serializePendingPayloadMutation(() => (
+    chrome.storage.session.set({ pendingPayload: payload })
+  ));
+}
+
+function removePendingPayloadIfExpected(expectedId) {
+  if (typeof expectedId !== 'string' || expectedId.length === 0) return Promise.resolve(false);
+  return serializePendingPayloadMutation(async () => {
+    const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
+    if (pendingPayload?.id !== expectedId) return false;
+    await chrome.storage.session.remove(['pendingPayload']);
+    return true;
+  });
+}
+
+function isPendingPayloadCurrent(expectedId) {
+  if (typeof expectedId !== 'string' || expectedId.length === 0) return Promise.resolve(false);
+  return serializePendingPayloadMutation(async () => {
+    const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
+    return pendingPayload?.id === expectedId;
+  });
+}
+
 async function consumePendingPayload(message, sender) {
   const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
   if (message.context === 'tab' && sender.frameId !== 0) {
@@ -272,15 +322,15 @@ async function consumePendingPayload(message, sender) {
   const result = matchPayloadRequest(pendingPayload, request);
 
   if (result.expired) {
-    await chrome.storage.session.remove(['pendingPayload']);
+    await removePendingPayloadIfExpected(pendingPayload?.id);
   }
   if (!result.matched) return { payload: null };
 
   if (pendingPayloadClaims.has(pendingPayload.id)) return { payload: null };
   pendingPayloadClaims.add(pendingPayload.id);
   try {
-    await chrome.storage.session.remove(['pendingPayload']);
-    return { payload: pendingPayload };
+    const removed = await removePendingPayloadIfExpected(pendingPayload.id);
+    return { payload: removed ? pendingPayload : null };
   } finally {
     pendingPayloadClaims.delete(pendingPayload.id);
   }
@@ -309,9 +359,11 @@ async function getPendingPanelProvider(message) {
     windowId: message.windowId,
   });
   if (result.expired) {
-    await chrome.storage.session.remove(['pendingPayload']);
+    await removePendingPayloadIfExpected(pendingPayload?.id);
   }
-  return { provider: result.matched ? pendingPayload.provider : null };
+  if (!result.matched) return { provider: null };
+  const isCurrent = await isPendingPayloadCurrent(pendingPayload.id);
+  return { provider: isCurrent ? pendingPayload.provider : null };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -454,7 +506,7 @@ async function handleSummarize({
       autoSubmit,
       target: { kind: 'sidepanel', windowId },
     });
-    await chrome.storage.session.set({ pendingPayload: payload });
+    await storePendingPayload(payload);
     await chrome.runtime.sendMessage({
       type: 'PANEL_NAVIGATE',
       windowId,
@@ -485,7 +537,7 @@ async function handleSummarize({
     autoSubmit,
     target: { kind: 'tab', tabId: targetTabId },
   });
-  await chrome.storage.session.set({ pendingPayload: payload });
+  await storePendingPayload(payload);
   return { success: true, destination: requestedDestination, provider, url: finalUrl };
 }
 

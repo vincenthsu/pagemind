@@ -39,6 +39,7 @@ function createChrome({
   registeredScripts = [],
   window = { id: 7, left: 0, top: 0, width: 1400, height: 900 },
   deferFirstSyncGet = false,
+  enforceUserActivation = false,
 } = {}) {
   const calls = [];
   const syncData = { ...sync };
@@ -55,6 +56,7 @@ function createChrome({
   let nextWindowId = 80;
   let syncGetCount = 0;
   let releaseFirstSyncGet;
+  let userActivation = false;
 
   function storageArea(name, data) {
     return {
@@ -160,6 +162,9 @@ function createChrome({
     },
     sidePanel: {
       async open(value) {
+        if (enforceUserActivation && !userActivation) {
+          throw new Error('sidePanel.open requires user activation');
+        }
         calls.push({ type: 'sidePanel.open', value });
       },
       async setPanelBehavior(value) {
@@ -219,6 +224,14 @@ function createChrome({
       assert.equal(typeof releaseFirstSyncGet, 'function');
       releaseFirstSyncGet();
     },
+    withUserActivation(callback) {
+      userActivation = true;
+      try {
+        return callback();
+      } finally {
+        userActivation = false;
+      }
+    },
   };
 }
 
@@ -242,18 +255,36 @@ async function sendRuntimeMessage(harness, message, sender = {}) {
   });
 }
 
-test('initialization migrates legacy toolbar settings and applies the three-mode Chrome configuration', async () => {
-  const harness = createChrome({ sync: { quickSummarize: true } });
+test('initialization migrates legacy toolbar settings and lets Chrome auto-open direct side-panel summaries', async () => {
+  const harness = createChrome({ sync: { quickSummarize: true, openMode: 'sidepanel' } });
   await loadBackground(harness);
 
   assert.deepEqual(callOf(harness, 'action.setPopup').at(-1).value, { popup: '' });
   assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
-    openPanelOnActionClick: false,
+    openPanelOnActionClick: true,
   });
   assert.equal(harness.syncData.toolbarAction, 'summarize');
 
   harness.syncData.toolbarAction = 'sidepanel';
   await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'sidepanel' } }, 'sync');
+  await tick();
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: true,
+  });
+
+  harness.syncData.toolbarAction = 'summarize';
+  harness.syncData.openMode = 'companion';
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: 'summarize' },
+    openMode: { newValue: 'companion' },
+  }, 'sync');
+  await tick();
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: false,
+  });
+
+  harness.syncData.openMode = 'sidepanel';
+  await harness.events.storageChanged.emit({ openMode: { newValue: 'sidepanel' } }, 'sync');
   await tick();
   assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
     openPanelOnActionClick: true,
@@ -292,8 +323,8 @@ test('embedding synchronization replaces only managed rules and only registered 
   assert.equal(callOf(harness, 'scripting.registerContentScripts').length, 0);
 });
 
-test('context menus install idempotently and use the clicked tab window for native panel actions', async () => {
-  const harness = createChrome();
+test('context menus install idempotently, encode destination, and track open-mode changes', async () => {
+  const harness = createChrome({ sync: { openMode: 'companion' } });
   await loadBackground(harness);
 
   await harness.events.installed.emit();
@@ -303,13 +334,49 @@ test('context menus install idempotently and use the clicked tab window for nati
 
   assert.equal(callOf(harness, 'contextMenus.removeAll').length, 2);
   const ids = callOf(harness, 'contextMenus.create').slice(-3).map((call) => call.value.id);
-  assert.deepEqual(ids, ['summarize-page', 'open-side-panel', 'open-settings']);
+  assert.deepEqual(ids, ['summarize-page-companion', 'open-side-panel', 'open-settings']);
+
+  harness.syncData.openMode = 'sidepanel';
+  await harness.events.storageChanged.emit({ openMode: { newValue: 'sidepanel' } }, 'sync');
+  await tick();
+  const updatedIds = callOf(harness, 'contextMenus.create').slice(-3).map((call) => call.value.id);
+  assert.deepEqual(updatedIds, ['summarize-page-sidepanel', 'open-side-panel', 'open-settings']);
 
   globalThis.chrome = harness.chrome;
   await harness.events.contextClicked.listener({ menuItemId: 'open-side-panel' }, { id: 55, windowId: 19 });
   assert.deepEqual(callOf(harness, 'sidePanel.open').at(-1).value, { windowId: 19 });
   await harness.events.contextClicked.listener({ menuItemId: 'open-settings' }, { id: 55, windowId: 19 });
   assert.equal(callOf(harness, 'runtime.openOptionsPage').length, 1);
+});
+
+test('cold context-menu summarization opens the panel synchronously before activation expires', async () => {
+  const harness = createChrome({
+    enforceUserActivation: true,
+    sync: {
+      openMode: 'sidepanel', defaultProvider: 'claude', defaultPromptIndex: 0,
+      includeUrl: false,
+    },
+    activeTab: { id: 56, windowId: 20, url: 'https://source.example/', title: 'Context source' },
+  });
+  await loadBackground(harness);
+  harness.calls.length = 0;
+
+  globalThis.chrome = harness.chrome;
+  harness.withUserActivation(() => harness.events.contextClicked.listener(
+    { menuItemId: 'summarize-page-sidepanel', selectionText: 'Context selection' },
+    { id: 56, windowId: 20 },
+  ));
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 20 });
+  assert.ok(
+    harness.calls.findIndex((call) => call.type === 'sidePanel.open')
+      < harness.calls.findIndex((call) => call.type === 'sync.get'),
+  );
+  assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'sidepanel', windowId: 20 });
+  assert.match(harness.sessionData.pendingPayload.text, /Context selection/);
 });
 
 test('GET_PAYLOAD consumes only an exact provider/context/tab match and preserves nonmatches', async () => {
@@ -372,6 +439,42 @@ test('concurrent exact GET_PAYLOAD requests deliver a pending payload only once'
   assert.equal(callOf(harness, 'session.remove').length, 1);
 });
 
+test('GET_PAYLOAD does not remove or deliver a replacement written after its matched snapshot', async () => {
+  const original = createPendingPayload({
+    id: 'payload-original', text: 'Original', provider: 'claude',
+    target: { kind: 'tab', tabId: 91 },
+  });
+  const replacement = createPendingPayload({
+    id: 'payload-replacement', text: 'Replacement', provider: 'grok',
+    target: { kind: 'tab', tabId: 92 },
+  });
+  const harness = createChrome({ session: { pendingPayload: original } });
+  await loadBackground(harness);
+  harness.calls.length = 0;
+
+  const originalGet = harness.chrome.storage.session.get.bind(harness.chrome.storage.session);
+  let firstRead = true;
+  harness.chrome.storage.session.get = async (keys) => {
+    if (firstRead) {
+      firstRead = false;
+      const snapshot = await originalGet(keys);
+      harness.sessionData.pendingPayload = replacement;
+      return snapshot;
+    }
+    return originalGet(keys);
+  };
+
+  const response = await sendRuntimeMessage(
+    harness,
+    { type: 'GET_PAYLOAD', provider: 'claude', context: 'tab' },
+    { tab: { id: 91 }, frameId: 0 },
+  );
+
+  assert.deepEqual(response, { payload: null });
+  assert.equal(harness.sessionData.pendingPayload, replacement);
+  assert.equal(callOf(harness, 'session.remove').length, 0);
+});
+
 test('a nested provider frame cannot claim a payload targeted to its top-level tab', async () => {
   const payload = createPendingPayload({
     id: 'payload-top-frame', text: 'Top-level only', provider: 'claude',
@@ -401,6 +504,67 @@ test('PANEL_READY reveals a pending provider only to its exact integer side-pane
   assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: '17' }), { provider: null });
   assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: 17 }), { provider: 'grok' });
   assert.equal(harness.sessionData.pendingPayload, payload);
+});
+
+test('PANEL_READY expired cleanup preserves a newer replacement payload', async () => {
+  const expired = createPendingPayload({
+    id: 'payload-panel-expired', text: 'Expired', provider: 'grok',
+    target: { kind: 'sidepanel', windowId: 17 }, createdAt: Date.now() - 60_001,
+  });
+  const replacement = createPendingPayload({
+    id: 'payload-panel-new', text: 'New', provider: 'claude',
+    target: { kind: 'sidepanel', windowId: 18 },
+  });
+  const harness = createChrome({ session: { pendingPayload: expired } });
+  await loadBackground(harness);
+
+  const originalGet = harness.chrome.storage.session.get.bind(harness.chrome.storage.session);
+  let firstRead = true;
+  harness.chrome.storage.session.get = async (keys) => {
+    if (firstRead) {
+      firstRead = false;
+      const snapshot = await originalGet(keys);
+      harness.sessionData.pendingPayload = replacement;
+      return snapshot;
+    }
+    return originalGet(keys);
+  };
+
+  assert.deepEqual(await sendRuntimeMessage(harness, {
+    type: 'PANEL_READY', windowId: 17,
+  }), { provider: null });
+  assert.equal(harness.sessionData.pendingPayload, replacement);
+  assert.equal(callOf(harness, 'session.remove').length, 0);
+});
+
+test('PANEL_READY does not reveal a provider from a replaced matching snapshot', async () => {
+  const original = createPendingPayload({
+    id: 'payload-panel-original', text: 'Original', provider: 'grok',
+    target: { kind: 'sidepanel', windowId: 17 },
+  });
+  const replacement = createPendingPayload({
+    id: 'payload-panel-current', text: 'Current', provider: 'claude',
+    target: { kind: 'sidepanel', windowId: 18 },
+  });
+  const harness = createChrome({ session: { pendingPayload: original } });
+  await loadBackground(harness);
+
+  const originalGet = harness.chrome.storage.session.get.bind(harness.chrome.storage.session);
+  let firstRead = true;
+  harness.chrome.storage.session.get = async (keys) => {
+    if (firstRead) {
+      firstRead = false;
+      const snapshot = await originalGet(keys);
+      harness.sessionData.pendingPayload = replacement;
+      return snapshot;
+    }
+    return originalGet(keys);
+  };
+
+  assert.deepEqual(await sendRuntimeMessage(harness, {
+    type: 'PANEL_READY', windowId: 17,
+  }), { provider: null });
+  assert.equal(harness.sessionData.pendingPayload, replacement);
 });
 
 test('a provider tab cannot claim a side-panel payload by spoofing its context and window ID', async () => {
@@ -532,7 +696,7 @@ test('companion fallback still stores against the exact provider tab it creates'
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'tab', tabId: 800 });
 });
 
-test('toolbar click opens a side panel under the click gesture only in direct-summarize mode', async () => {
+test('toolbar direct-summary relies on Chrome auto-open and still targets the clicked window panel', async () => {
   const harness = createChrome({
     sync: {
       toolbarAction: 'sidepanel', defaultProvider: 'chatgpt', defaultPromptIndex: 0,
@@ -551,21 +715,21 @@ test('toolbar click opens a side panel under the click gesture only in direct-su
   harness.syncData.toolbarAction = 'summarize';
   await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'summarize' } }, 'sync');
   await tick();
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: true,
+  });
   harness.calls.length = 0;
   await harness.events.actionClicked.listener({ id: 71, windowId: 44 });
   await tick();
   await tick();
-  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 44 });
-  assert.ok(
-    harness.calls.findIndex((call) => call.type === 'sidePanel.open')
-      < harness.calls.findIndex((call) => call.type === 'tabs.query'),
-  );
+  assert.equal(callOf(harness, 'sidePanel.open').length, 0);
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'sidepanel', windowId: 44 });
 });
 
-test('a cold-worker toolbar click starts a gesture-bound settings lookup before opening the panel', async () => {
+test('a cold-worker toolbar click summarizes without a late manual panel open', async () => {
   const harness = createChrome({
     deferFirstSyncGet: true,
+    enforceUserActivation: true,
     sync: {
       toolbarAction: 'summarize', defaultProvider: 'chatgpt', defaultPromptIndex: 0,
       openMode: 'sidepanel', includeUrl: false,
@@ -576,24 +740,16 @@ test('a cold-worker toolbar click starts a gesture-bound settings lookup before 
   harness.calls.length = 0;
 
   globalThis.chrome = harness.chrome;
-  harness.events.actionClicked.listener({ id: 72, windowId: 45 });
+  harness.withUserActivation(() => harness.events.actionClicked.listener({ id: 72, windowId: 45 }));
   await tick();
   await tick();
   await tick();
 
-  const panelOpenIndex = harness.calls.findIndex((call) => call.type === 'sidePanel.open');
-  const gestureLookups = harness.calls
-    .slice(0, panelOpenIndex)
-    .filter((call) => call.type === 'sync.get');
-  assert.equal(gestureLookups.length, 1);
-  assert.deepEqual(gestureLookups[0].keys, [
+  const gestureLookup = callOf(harness, 'sync.get')[0];
+  assert.deepEqual(gestureLookup.keys, [
     'toolbarAction', 'quickSummarize', 'defaultProvider', 'defaultPromptIndex', 'openMode',
   ]);
-  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 45 });
-  assert.ok(
-    harness.calls.findIndex((call) => call.type === 'sidePanel.open')
-      < harness.calls.findIndex((call) => call.type === 'tabs.query'),
-  );
+  assert.equal(callOf(harness, 'sidePanel.open').length, 0);
   assert.deepEqual(harness.sessionData.pendingPayload.target, { kind: 'sidepanel', windowId: 45 });
   harness.releaseFirstSyncGet();
 });
