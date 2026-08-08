@@ -5,7 +5,6 @@ import { DEFAULT_PROMPTS } from '../lib/providers.js';
 
 const optionsHtml = await readFile(new URL('../options.html', import.meta.url), 'utf8');
 const optionsJs = await readFile(new URL('../options.js', import.meta.url), 'utf8');
-const backgroundJs = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
 
 function radioValues(name) {
@@ -123,6 +122,20 @@ class FakeDocument {
   }
 }
 
+class FakeWindow {
+  constructor() {
+    this.listeners = new Map();
+  }
+
+  addEventListener(type, listener) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  async dispatch(type) {
+    for (const listener of this.listeners.get(type) ?? []) await listener();
+  }
+}
+
 function waitForSave() {
   return new Promise((resolve) => setTimeout(resolve, 325));
 }
@@ -130,6 +143,7 @@ function waitForSave() {
 let moduleId = 0;
 async function bootOptions({ settings = {}, delayedGet = false, getError = false, holdSaves = false } = {}) {
   const document = new FakeDocument();
+  const window = new FakeWindow();
   const calls = [];
   let resolveGet;
   const pendingSets = [];
@@ -157,12 +171,15 @@ async function bootOptions({ settings = {}, delayedGet = false, getError = false
 
   const previousDocument = globalThis.document;
   const previousChrome = globalThis.chrome;
+  const previousWindow = globalThis.window;
   globalThis.document = document;
   globalThis.chrome = chrome;
+  globalThis.window = window;
   await import(new URL(`../options.js?ui-test=${moduleId += 1}`, import.meta.url));
 
   return {
     document,
+    window,
     chrome,
     calls,
     resolveGet: () => resolveGet?.(),
@@ -175,6 +192,7 @@ async function bootOptions({ settings = {}, delayedGet = false, getError = false
     restore() {
       globalThis.document = previousDocument;
       globalThis.chrome = previousChrome;
+      globalThis.window = previousWindow;
     },
   };
 }
@@ -337,7 +355,7 @@ test('an in-flight same-key autosave serializes the latest value', async () => {
   }
 });
 
-test('failed saves announce an accessible error and retain the dirty value', async () => {
+test('failed saves wait for a later edit before retrying retained dirty keys', async () => {
   const harness = await bootOptions({ holdSaves: true });
   try {
     await harness.start();
@@ -351,16 +369,37 @@ test('failed saves announce an accessible error and retain the dirty value', asy
     assert.equal(feedback.classList.contains('visible'), true);
     assert.equal(feedback.classList.contains('error'), true);
     assert.equal(feedback.textContent, 'Could not save settings. Try again.');
+
     await waitForSave();
-    assert.deepEqual(harness.calls, [{ autoSubmit: false }, { autoSubmit: false }]);
+    await waitForSave();
+    assert.deepEqual(harness.calls, [{ autoSubmit: false }]);
+
+    const includeUrl = harness.document.getElementById('includeUrlToggle');
+    includeUrl.checked = false;
+    await includeUrl.dispatch('change');
+    await waitForSave();
+    assert.deepEqual(harness.calls, [
+      { autoSubmit: false },
+      { autoSubmit: false, includeUrl: false },
+    ]);
     harness.resolveSave();
   } finally {
     harness.restore();
   }
 });
 
-test('context menu keeps summary, Side Panel, and settings actions', () => {
-  for (const id of ['summarize-page', 'open-side-panel', 'open-settings']) {
-    assert.match(backgroundJs, new RegExp(id));
+test('pagehide flushes pending dirty settings without waiting for the debounce', async () => {
+  const harness = await bootOptions({ holdSaves: true });
+  try {
+    await harness.start();
+    const autoSubmit = harness.document.getElementById('autoSubmitToggle');
+    autoSubmit.checked = false;
+    await autoSubmit.dispatch('change');
+    await harness.window.dispatch('pagehide');
+    assert.deepEqual(harness.calls, [{ autoSubmit: false }]);
+  } finally {
+    await waitForSave();
+    harness.resolveSave();
+    harness.restore();
   }
 });

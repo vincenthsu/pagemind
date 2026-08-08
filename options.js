@@ -25,6 +25,7 @@ const dirtyKeys = new Set();
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   registerEventListeners();
+  window.addEventListener('pagehide', flushOnPageHide);
 });
 
 function registerEventListeners() {
@@ -309,9 +310,15 @@ function flushDirtySettings() {
       showSaveFeedback('Could not save settings. Try again.', true);
     } else {
       showSaveFeedback('✓ Settings saved');
+      if (dirtyKeys.size > 0) scheduleSave();
     }
-    if (dirtyKeys.size > 0) scheduleSave();
   });
+}
+
+function flushOnPageHide() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  flushDirtySettings();
 }
 
 function buildSavePayload(keys) {
