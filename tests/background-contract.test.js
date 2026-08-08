@@ -1319,6 +1319,62 @@ test('summaries targeting two provider tabs coexist and consuming one preserves 
   assert.equal(routedPayload(harness, 'tab', 801).provider, 'claude');
 });
 
+test('a newer side-panel invocation wins when an older preflight finishes late', async () => {
+  const harness = createChrome({
+    sync: { openMode: 'sidepanel', includeUrl: false },
+    activeTab: { id: 109, windowId: 20, url: 'https://old.example/', title: 'Old' },
+  });
+  await loadBackground(harness);
+  harness.setActiveTab({ id: 110, windowId: 20, url: 'https://new.example/', title: 'New' });
+  harness.calls.length = 0;
+
+  const originalTabsGet = harness.chrome.tabs.get.bind(harness.chrome.tabs);
+  let releaseOlderPreflight;
+  let markOlderPreflightStarted;
+  const olderPreflightStarted = new Promise((resolve) => {
+    markOlderPreflightStarted = resolve;
+  });
+  harness.chrome.tabs.get = async (tabId) => {
+    if (tabId === 109) {
+      markOlderPreflightStarted();
+      await new Promise((resolve) => {
+        releaseOlderPreflight = resolve;
+      });
+    }
+    return originalTabsGet(tabId);
+  };
+
+  const older = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0,
+    sourceTabId: 109, sourceWindowId: 20, destination: 'sidepanel',
+  });
+  await olderPreflightStarted;
+  const newerResult = await sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'New payload',
+    sourceTabId: 110, sourceWindowId: 20, destination: 'sidepanel',
+  });
+  releaseOlderPreflight();
+  const olderResult = await older;
+
+  assert.equal(newerResult.success, true);
+  assert.deepEqual(olderResult, {
+    success: true,
+    superseded: true,
+    destination: 'sidepanel',
+    provider: 'claude',
+    url: 'https://claude.ai/new',
+  });
+  const pending = routedPayload(harness, 'sidepanel', 20);
+  assert.match(pending.text, /New payload/);
+  assert.doesNotMatch(pending.text, /old\.example/i);
+  const navigations = callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE');
+  assert.equal(navigations.length, 1);
+  assert.equal(navigations[0].message.windowId, 20);
+  assert.equal(callOf(harness, 'scripting.executeScript')
+    .some((call) => call.value.target.tabId === 109), false);
+});
+
 test('a newer side-panel invocation supersedes slow work only in its own window', async () => {
   const harness = createChrome({
     sync: { openMode: 'sidepanel', includeUrl: false },

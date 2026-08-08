@@ -47,8 +47,8 @@ let embeddingRefreshGeneration = 0;
 let embeddingRefreshPromise = null;
 let embeddingSettingsRevision = 0;
 let latestScheduledEmbeddingRevision = -1;
-let nextSidePanelInvocationGeneration = 0;
-const sidePanelInvocationGenerations = new Map();
+let nextSummarizeInvocationSequence = 0;
+const sidePanelInvocationSequences = new Map();
 
 async function applyToolbarAction(
   settings = {},
@@ -415,7 +415,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 // --- Restore main window when companion is closed ---
 chrome.windows.onRemoved.addListener(async (closedWindowId) => {
-  sidePanelInvocationGenerations.delete(closedWindowId);
+  sidePanelInvocationSequences.delete(closedWindowId);
   try {
     const data = await chrome.storage.session.get(['companionWindowId', 'originalWindowBounds']);
     if (data.companionWindowId !== closedWindowId) return;
@@ -558,14 +558,15 @@ function storePendingPayload(payload, isCurrent) {
   });
 }
 
-function beginSidePanelInvocation(windowId) {
-  nextSidePanelInvocationGeneration += 1;
-  sidePanelInvocationGenerations.set(windowId, nextSidePanelInvocationGeneration);
-  return nextSidePanelInvocationGeneration;
+function registerSidePanelInvocation(windowId, invocationSequence) {
+  const currentSequence = sidePanelInvocationSequences.get(windowId);
+  if (Number.isInteger(currentSequence) && currentSequence >= invocationSequence) return false;
+  sidePanelInvocationSequences.set(windowId, invocationSequence);
+  return true;
 }
 
-function isCurrentSidePanelInvocation(windowId, generation) {
-  return sidePanelInvocationGenerations.get(windowId) === generation;
+function isCurrentSidePanelInvocation(windowId, invocationSequence) {
+  return sidePanelInvocationSequences.get(windowId) === invocationSequence;
 }
 
 async function consumePendingPayload(message, sender) {
@@ -659,6 +660,9 @@ async function handleSummarize({
   source,
   destination,
 }) {
+  nextSummarizeInvocationSequence += 1;
+  const invocationSequence = nextSummarizeInvocationSequence;
+
   if (typeof provider !== 'string' || !Object.hasOwn(PROVIDERS, provider)) {
     throw new Error(`Unknown provider: ${String(provider)}`);
   }
@@ -702,17 +706,6 @@ async function handleSummarize({
     source,
   );
   const finalUrl = resolveProviderUrl(provider, customUrls);
-  let sidePanelInvocation;
-  if (requestedDestination === 'sidepanel') {
-    const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
-    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
-    const generation = beginSidePanelInvocation(windowId);
-    sidePanelInvocation = {
-      windowId,
-      generation,
-      isCurrent: () => isCurrentSidePanelInvocation(windowId, generation),
-    };
-  }
   const supersededResult = {
     success: true,
     superseded: true,
@@ -720,6 +713,18 @@ async function handleSummarize({
     provider,
     url: finalUrl,
   };
+  let sidePanelInvocation;
+  if (requestedDestination === 'sidepanel') {
+    const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
+    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
+    const registered = registerSidePanelInvocation(windowId, invocationSequence);
+    sidePanelInvocation = {
+      windowId,
+      invocationSequence,
+      isCurrent: () => isCurrentSidePanelInvocation(windowId, invocationSequence),
+    };
+    if (!registered) return supersededResult;
+  }
   const isYouTube = tabUrl.includes('youtube.com/watch');
   let extractedContent;
   let finalSelectedText = typeof selectedText === 'string' ? selectedText.trim() : '';
