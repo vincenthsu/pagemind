@@ -55,6 +55,7 @@ export function createSidePanelController({
     runtimeNavigationGeneration: 0,
     customUrlsRevision: 0,
     consumeRequestGeneration: 0,
+    latestSuccessfulConsumeGeneration: 0,
     payloadErrorVisible: false,
     pageInfoGeneration: 0,
   };
@@ -272,12 +273,13 @@ export function createSidePanelController({
     }, readinessTimeoutMs);
   }
 
-  function postPayload(generation, provider, origin, payload) {
+  function postPayload(generation, provider, origin, payload, consumeGeneration) {
     if (
       state.navigationGeneration !== generation
       || state.selectedProvider !== provider
       || state.currentOrigin !== origin
       || !state.providerReady
+      || consumeGeneration < state.latestSuccessfulConsumeGeneration
     ) return false;
     elements.frame.contentWindow.postMessage({
       type: 'PAGE_MIND_DELIVER',
@@ -286,6 +288,10 @@ export function createSidePanelController({
       payloadId: payload.id,
       payload,
     }, origin);
+    state.latestSuccessfulConsumeGeneration = Math.max(
+      state.latestSuccessfulConsumeGeneration,
+      consumeGeneration,
+    );
     clearPayloadError();
     hideFallback();
     return true;
@@ -301,10 +307,20 @@ export function createSidePanelController({
     state.consumeRequestGeneration += 1;
     const consumeGeneration = state.consumeRequestGeneration;
     const retained = state.retainedPayload;
-    if (retained?.provider === provider && postPayload(generation, provider, origin, retained.payload)) {
-      state.retainedPayload = null;
-      clearPayloadError();
-      hideFallback();
+    if (retained?.provider === provider) {
+      if (retained.consumeGeneration < state.latestSuccessfulConsumeGeneration) {
+        state.retainedPayload = null;
+      } else if (postPayload(
+        generation,
+        provider,
+        origin,
+        retained.payload,
+        retained.consumeGeneration,
+      )) {
+        state.retainedPayload = null;
+        clearPayloadError();
+        hideFallback();
+      }
     }
     let response;
     try {
@@ -343,6 +359,7 @@ export function createSidePanelController({
     }
     const payload = response?.payload;
     if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string' || payload.id.length === 0) return;
+    if (consumeGeneration < state.latestSuccessfulConsumeGeneration) return;
     if (
       state.navigationGeneration !== generation
       || state.selectedProvider !== provider
@@ -350,18 +367,20 @@ export function createSidePanelController({
       || !state.providerReady
     ) {
       if (state.selectedProvider === provider) {
-        state.retainedPayload = { provider, payload };
+        if (!state.retainedPayload || consumeGeneration >= state.retainedPayload.consumeGeneration) {
+          state.retainedPayload = { provider, payload, consumeGeneration };
+        }
         if (state.providerReady) {
           const currentGeneration = state.navigationGeneration;
           const currentOrigin = state.currentOrigin;
-          if (postPayload(currentGeneration, provider, currentOrigin, payload)) {
+          if (postPayload(currentGeneration, provider, currentOrigin, payload, consumeGeneration)) {
             state.retainedPayload = null;
           }
         }
       }
       return;
     }
-    postPayload(generation, provider, origin, payload);
+    postPayload(generation, provider, origin, payload, consumeGeneration);
   }
 
   async function handleFrameMessage(event) {
@@ -504,10 +523,10 @@ export function createSidePanelController({
   }
 
   async function openCurrentProvider() {
-    if (!state.currentUrl) return;
     try {
+      const url = state.currentUrl || resolveCurrentUrl(state.selectedProvider);
       await callbackCall((callback) => chrome.tabs.create(
-        { url: state.currentUrl, active: true },
+        { url, active: true },
         callback,
       ));
     } catch (error) {
@@ -593,6 +612,9 @@ export function createSidePanelController({
     const navigationGeneration = state.navigationGeneration;
     const runtimeNavigationGeneration = state.runtimeNavigationGeneration;
     try {
+      if (!Number.isInteger(state.panelWindowId)) {
+        state.panelWindowId = await resolvePanelWindowId();
+      }
       const pendingProvider = await discoverPendingProvider();
       if (
         navigationGeneration !== state.navigationGeneration
@@ -600,6 +622,7 @@ export function createSidePanelController({
       ) return;
       if (!state.payloadErrorVisible) setStatus('', '');
       navigate(pendingProvider ?? state.selectedProvider);
+      await refreshActiveTab();
     } catch (error) {
       if (
         navigationGeneration !== state.navigationGeneration

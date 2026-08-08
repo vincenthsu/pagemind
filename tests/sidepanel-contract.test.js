@@ -621,6 +621,29 @@ test('late valid payload clears a newer consume error overlay when posted to cur
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
 });
 
+test('older successful consume cannot post after a newer payload already delivered', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  await harness.controller.initialize();
+  let firstCallback;
+  let requestCount = 0;
+  const originalSend = harness.chrome.runtime.sendMessage;
+  harness.chrome.runtime.sendMessage = (message, callback) => {
+    if (message.type !== 'GET_PAYLOAD') return originalSend(message, callback);
+    requestCount += 1;
+    if (requestCount === 1) firstCallback = callback;
+    else callback({ payload: { id: 'newer', provider: 'claude', text: 'Newer' } });
+    return undefined;
+  };
+  await harness.ready('claude', 'https://claude.ai');
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await flush();
+  firstCallback({ payload: { id: 'older', provider: 'claude', text: 'Older' } });
+  await flush();
+  assert.deepEqual(harness.frame.posts.map(({ message }) => message.payloadId), ['newer']);
+});
+
 test('startup PANEL_READY errors are visible and retry discovers the pending provider', async () => {
   const harness = createHarness({ settings: { lastProvider: 'chatgpt' } });
   harness.setPanelReadyResponse({ error: 'discovery failed' });
@@ -703,6 +726,42 @@ test('successful retry clears a previous payload retrieval error', async () => {
   await harness.ready('claude', 'https://claude.ai');
   assert.equal(harness.document.getElementById('statusMsg').textContent, '');
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
+});
+
+test('retry resolves the panel window again after initial window lookup failure', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  let lookupCount = 0;
+  harness.chrome.windows.getCurrent = (_options, callback) => {
+    lookupCount += 1;
+    if (lookupCount === 1) {
+      harness.chrome.runtime.lastError = { message: 'window lookup failed' };
+      callback();
+      delete harness.chrome.runtime.lastError;
+    } else callback({ id: 7 });
+  };
+  await harness.controller.initialize();
+  assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), true);
+  await harness.document.getElementById('retryFrameBtn').dispatch('click');
+  await flush();
+  assert.equal(lookupCount, 2);
+  assert.equal(harness.frame.src, 'https://claude.ai/new');
+  assert.deepEqual(harness.runtimeCalls.at(-1), { type: 'PANEL_READY', windowId: 7 });
+  assert.equal(harness.document.getElementById('pageTitle').textContent, 'Source');
+});
+
+test('fallback open-tab resolves a safe provider URL before any frame navigation', async () => {
+  const harness = createHarness({
+    settings: { lastProvider: 'claude', customUrls: { claude: 'http://unsafe.test/chat' } },
+  });
+  harness.chrome.windows.getCurrent = (_options, callback) => {
+    harness.chrome.runtime.lastError = { message: 'window lookup failed' };
+    callback();
+    delete harness.chrome.runtime.lastError;
+  };
+  await harness.controller.initialize();
+  await harness.document.getElementById('fallbackNewTabBtn').dispatch('click');
+  await flush();
+  assert.deepEqual(harness.tabCreates, [{ url: 'https://claude.ai/new', active: true }]);
 });
 
 test('collapse remains reversible and reload starts a fresh navigation', async () => {
