@@ -99,11 +99,13 @@ async function createHarness({
 }
 
 async function createProviderHarness(provider, {
+  clearInputOnSubmit = false,
   execCommandResult = true,
   forgeGrokResult = false,
   inputAvailable = true,
   loadGrokMain = true,
   now = NOW,
+  initialInputText = '',
   submitAvailable = true,
   submitDisabled = false,
 } = {}) {
@@ -192,7 +194,9 @@ async function createProviderHarness(provider, {
     const originalDispatch = element.dispatchEvent;
     element.dispatchEvent = (event) => {
       element.events.push(event);
-      return originalDispatch(event);
+      const accepted = originalDispatch(event);
+      if (event.bubbles) document.dispatchEvent(event);
+      return accepted;
     };
     return element;
   }
@@ -205,6 +209,16 @@ async function createProviderHarness(provider, {
   };
   const submit = createElement('BUTTON');
   submit.disabled = submitDisabled;
+  if (provider === 'grok') inputs.grok.value = initialInputText;
+  else inputs[provider].textContent = initialInputText;
+  if (clearInputOnSubmit) {
+    const originalClick = submit.click;
+    submit.click = () => {
+      originalClick();
+      inputs[provider].value = '';
+      inputs[provider].textContent = '';
+    };
+  }
   const primarySelectors = {
     chatgpt: '#prompt-textarea',
     gemini: '.ql-editor[contenteditable="true"]',
@@ -945,6 +959,59 @@ test('forged Grok success without editor mutation cannot trigger an ACK', async 
   assert.equal(harness.input.value, '');
   assert.equal(harness.parentMessages.length, 1);
   assert.equal(harness.timers.some(({ delay, cleared }) => delay === 300 && !cleared), true);
+});
+
+test('empty Grok payload is rejected without dispatch or ACK', async () => {
+  const harness = await createProviderHarness('grok', { loadGrokMain: false });
+
+  harness.deliver({ data: {
+    type: 'PAGE_MIND_DELIVER', provider: 'grok', windowId: 31,
+    payloadId: 'grok-empty',
+    payload: { provider: 'grok', text: '', autoSubmit: false, createdAt: NOW },
+  } });
+  await settleEvents();
+
+  assert.equal(harness.documentEvents.some(({ type }) => (
+    type === '__PAGE_MIND_GROK_DELIVER__'
+  )), false);
+  assert.equal(harness.parentMessages.length, 1);
+});
+
+for (const [label, initialInputText] of [
+  ['substring', 'prefix Prompt for grok suffix'],
+  ['exact text', 'Prompt for grok'],
+]) {
+  test(`preexisting Grok ${label} cannot validate a forged success`, async () => {
+    const harness = await createProviderHarness('grok', {
+      forgeGrokResult: true,
+      initialInputText,
+      loadGrokMain: false,
+    });
+
+    harness.deliver();
+    await settleEvents();
+
+    assert.equal(harness.input.value, initialInputText);
+    assert.equal(harness.parentMessages.length, 1);
+  });
+}
+
+test('Grok latches genuine exact insertion before auto-submit clears the editor', async () => {
+  const harness = await createProviderHarness('grok', { clearInputOnSubmit: true });
+
+  harness.deliver({ data: {
+    type: 'PAGE_MIND_DELIVER', provider: 'grok', windowId: 31,
+    payloadId: 'grok-cleared-after-submit',
+    payload: { provider: 'grok', text: 'Clear me', autoSubmit: true, createdAt: NOW },
+  } });
+  await Promise.resolve();
+  harness.runTimer(800);
+  await settleEvents();
+
+  assert.equal(harness.input.value, '');
+  assert.equal(harness.parentMessages.filter(({ data }) => (
+    data.type === 'PAGE_MIND_DELIVERED'
+  )).length, 1);
 });
 
 test('Grok MAIN polling cannot mutate the editor after absolute expiry', async () => {

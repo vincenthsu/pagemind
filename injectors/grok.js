@@ -16,14 +16,17 @@
       && keys.every((key, index) => key === expectedKeys[index]);
   }
 
-  function getEditorText() {
-    const inputEl = (
+  function getEditorEl() {
+    return (
       document.querySelector('textarea[placeholder]') ||
       document.querySelector('textarea') ||
       document.querySelector('[contenteditable="true"][role="textbox"]') ||
       document.querySelector('[data-lexical-editor="true"]') ||
       document.querySelector('[contenteditable="true"]')
     );
+  }
+
+  function getEditorText(inputEl = getEditorEl()) {
     if (!inputEl) return '';
     return inputEl.tagName === 'TEXTAREA'
       ? String(inputEl.value ?? '')
@@ -35,10 +38,11 @@
   }
 
   function injectPayload(payload, delivery) {
-    if (!payload || typeof payload.text !== 'string') {
-      return Promise.reject(new TypeError('Grok payload text must be a string'));
+    if (!payload || typeof payload.text !== 'string' || payload.text.length === 0) {
+      return Promise.reject(new TypeError('Grok payload text must be a nonempty string'));
     }
 
+    const initialEditorText = getEditorText();
     const requestId = crypto.randomUUID();
     const detail = {
       requestId,
@@ -51,9 +55,22 @@
       let retryTimer;
       let timeoutTimer;
       let settled = false;
+      let observedExactMutation = false;
+
+      function handleEditorMutation(event) {
+        const editorEl = getEditorEl();
+        if (!editorEl || event.target !== editorEl) return;
+        const currentEditorText = getEditorText(editorEl);
+        if (
+          currentEditorText === payload.text
+          && currentEditorText !== initialEditorText
+        ) observedExactMutation = true;
+      }
 
       function cleanup() {
         document.removeEventListener(RESULT_EVENT, handleResult);
+        document.removeEventListener('input', handleEditorMutation, true);
+        document.removeEventListener('change', handleEditorMutation, true);
         clearTimeout(retryTimer);
         clearTimeout(timeoutTimer);
       }
@@ -66,7 +83,7 @@
           || typeof event.detail.ok !== 'boolean'
         ) return;
 
-        if (event.detail.ok && !getEditorText().includes(payload.text)) return;
+        if (event.detail.ok && !observedExactMutation) return;
         settled = true;
         cleanup();
         if (!event.detail.ok) {
@@ -96,6 +113,8 @@
       }
 
       document.addEventListener(RESULT_EVENT, handleResult);
+      document.addEventListener('input', handleEditorMutation, true);
+      document.addEventListener('change', handleEditorMutation, true);
       timeoutTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
