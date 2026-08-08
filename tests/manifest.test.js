@@ -46,7 +46,7 @@ test('injects the bridge into every isolated provider frame', () => {
     {
       matches: ['https://grok.com/*'],
       js: ['injectors/bridge.js', 'injectors/grok.js'],
-      run_at: 'document_idle',
+      run_at: 'document_start',
       all_frames: true,
     },
   ]);
@@ -60,7 +60,7 @@ test('runs the Grok main-world injector in every frame', () => {
   assert.deepEqual(grokMain, {
     matches: ['https://grok.com/*'],
     js: ['injectors/grok-main.js'],
-    run_at: 'document_idle',
+    run_at: 'document_start',
     all_frames: true,
     world: 'MAIN',
   });

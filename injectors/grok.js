@@ -1,13 +1,19 @@
 // Content script injected on grok.com in the ISOLATED world.
-// Relays bridge payloads to the MAIN-world editor adapter over document events.
+// Bootstraps private document-event channels before host page scripts run.
 
 (function () {
   'use strict';
 
-  const REQUEST_EVENT = '__PAGE_MIND_GROK_DELIVER__';
-  const RESULT_EVENT = '__PAGE_MIND_GROK_RESULT__';
+  const BOOTSTRAP_REQUEST_EVENT = '__PAGE_MIND_GROK_CHANNEL_REQUEST__';
+  const BOOTSTRAP_READY_EVENT = '__PAGE_MIND_GROK_CHANNEL_READY__';
+  const BOOTSTRAP_ACCEPTED_EVENT = '__PAGE_MIND_GROK_CHANNEL_ACCEPTED__';
+  const BOOTSTRAP_TIMEOUT = 5000;
   const RETRY_DELAY = 300;
   const RESULT_TIMEOUT = 30000;
+  const LocalCustomEvent = CustomEvent;
+  const addDocumentListener = document.addEventListener.bind(document);
+  const removeDocumentListener = document.removeEventListener.bind(document);
+  const dispatchDocumentEvent = document.dispatchEvent.bind(document);
 
   function hasExactKeys(value, expectedKeys) {
     if (!value || typeof value !== 'object') return false;
@@ -15,6 +21,47 @@
     return keys.length === expectedKeys.length
       && keys.every((key, index) => key === expectedKeys[index]);
   }
+
+  const channelPromise = new Promise((resolve) => {
+    let settled = false;
+    let timeoutTimer;
+
+    function finish(channel) {
+      if (settled) return;
+      settled = true;
+      removeDocumentListener(BOOTSTRAP_READY_EVENT, handleReady);
+      clearTimeout(timeoutTimer);
+      resolve(channel);
+    }
+
+    function handleReady(event) {
+      const detail = event.detail;
+      if (
+        event.target !== document
+        || !hasExactKeys(detail, ['bootstrapId', 'requestEvent', 'resultEvent'])
+        || typeof detail.bootstrapId !== 'string'
+        || detail.bootstrapId.length === 0
+        || typeof detail.requestEvent !== 'string'
+        || detail.requestEvent.length === 0
+        || typeof detail.resultEvent !== 'string'
+        || detail.resultEvent.length === 0
+        || detail.requestEvent === detail.resultEvent
+      ) return;
+
+      const channel = Object.freeze({
+        requestEvent: detail.requestEvent,
+        resultEvent: detail.resultEvent,
+      });
+      dispatchDocumentEvent(new LocalCustomEvent(BOOTSTRAP_ACCEPTED_EVENT, {
+        detail: { bootstrapId: detail.bootstrapId },
+      }));
+      finish(channel);
+    }
+
+    addDocumentListener(BOOTSTRAP_READY_EVENT, handleReady);
+    timeoutTimer = setTimeout(() => finish(null), BOOTSTRAP_TIMEOUT);
+    dispatchDocumentEvent(new LocalCustomEvent(BOOTSTRAP_REQUEST_EVENT));
+  });
 
   function getEditorEl() {
     return (
@@ -37,10 +84,14 @@
     if (delivery && !delivery.isCurrent()) throw new Error('Grok payload expired');
   }
 
-  function injectPayload(payload, delivery) {
+  async function injectPayload(payload, delivery) {
     if (!payload || typeof payload.text !== 'string' || payload.text.length === 0) {
-      return Promise.reject(new TypeError('Grok payload text must be a nonempty string'));
+      throw new TypeError('Grok payload text must be a nonempty string');
     }
+
+    const channel = await channelPromise;
+    if (!channel) throw new Error('Grok MAIN-world channel is not available');
+    ensureCurrent(delivery);
 
     const initialEditorText = getEditorText();
     const requestId = crypto.randomUUID();
@@ -68,9 +119,9 @@
       }
 
       function cleanup() {
-        document.removeEventListener(RESULT_EVENT, handleResult);
-        document.removeEventListener('input', handleEditorMutation, true);
-        document.removeEventListener('change', handleEditorMutation, true);
+        removeDocumentListener(channel.resultEvent, handleResult);
+        removeDocumentListener('input', handleEditorMutation, true);
+        removeDocumentListener('change', handleEditorMutation, true);
         clearTimeout(retryTimer);
         clearTimeout(timeoutTimer);
       }
@@ -108,13 +159,13 @@
           reject(error);
           return;
         }
-        document.dispatchEvent(new CustomEvent(REQUEST_EVENT, { detail }));
+        dispatchDocumentEvent(new LocalCustomEvent(channel.requestEvent, { detail }));
         if (!settled) retryTimer = setTimeout(dispatchRequest, RETRY_DELAY);
       }
 
-      document.addEventListener(RESULT_EVENT, handleResult);
-      document.addEventListener('input', handleEditorMutation, true);
-      document.addEventListener('change', handleEditorMutation, true);
+      addDocumentListener(channel.resultEvent, handleResult);
+      addDocumentListener('input', handleEditorMutation, true);
+      addDocumentListener('change', handleEditorMutation, true);
       timeoutTimer = setTimeout(() => {
         if (settled) return;
         settled = true;

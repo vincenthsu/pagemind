@@ -4,13 +4,35 @@
 (function () {
   'use strict';
 
-  const REQUEST_EVENT = '__PAGE_MIND_GROK_DELIVER__';
-  const RESULT_EVENT = '__PAGE_MIND_GROK_RESULT__';
+  const BOOTSTRAP_REQUEST_EVENT = '__PAGE_MIND_GROK_CHANNEL_REQUEST__';
+  const BOOTSTRAP_READY_EVENT = '__PAGE_MIND_GROK_CHANNEL_READY__';
+  const BOOTSTRAP_ACCEPTED_EVENT = '__PAGE_MIND_GROK_CHANNEL_ACCEPTED__';
+  const BOOTSTRAP_TIMEOUT = 5000;
   const POLL_INTERVAL = 400;
   const MAX_POLLS = 50;
   const MAX_COMPLETED_REQUEST_IDS = 256;
   const inFlightRequestIds = new Set();
   const deliveredRequestIds = new Set();
+  const LocalCustomEvent = CustomEvent;
+  const LocalEvent = Event;
+  const LocalInputEvent = InputEvent;
+  const LocalKeyboardEvent = KeyboardEvent;
+  const dispatchTargetEvent = EventTarget.prototype.dispatchEvent;
+  const addDocumentListener = document.addEventListener.bind(document);
+  const removeDocumentListener = document.removeEventListener.bind(document);
+  const dispatchDocumentEvent = document.dispatchEvent.bind(document);
+  const queryDocument = document.querySelector.bind(document);
+  const execDocumentCommand = document.execCommand.bind(document);
+  const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype,
+    'value',
+  )?.set;
+  const now = Date.now.bind(Date);
+  const scheduleTimeout = setTimeout.bind(globalThis);
+  const cancelTimeout = clearTimeout.bind(globalThis);
+  const bootstrapId = crypto.randomUUID();
+  const requestEvent = crypto.randomUUID();
+  const resultEvent = crypto.randomUUID();
 
   function hasExactKeys(value, expectedKeys) {
     if (!value || typeof value !== 'object') return false;
@@ -21,45 +43,41 @@
 
   function getInputEl() {
     return (
-      document.querySelector('textarea[placeholder]') ||
-      document.querySelector('textarea') ||
-      document.querySelector('[contenteditable="true"][role="textbox"]') ||
-      document.querySelector('[data-lexical-editor="true"]') ||
-      document.querySelector('[contenteditable="true"]')
+      queryDocument('textarea[placeholder]') ||
+      queryDocument('textarea') ||
+      queryDocument('[contenteditable="true"][role="textbox"]') ||
+      queryDocument('[data-lexical-editor="true"]') ||
+      queryDocument('[contenteditable="true"]')
     );
   }
 
   function getSubmitEl() {
     return (
-      document.querySelector('button[aria-label="Send"]') ||
-      document.querySelector('button[aria-label="Submit"]') ||
-      document.querySelector('button[aria-label="送出"]') ||
-      document.querySelector('button[aria-label="提交"]') ||
-      document.querySelector('button[aria-label="傳送"]') ||
-      document.querySelector('button[type="submit"]') ||
-      document.querySelector('button:has(svg[viewBox] path)')
+      queryDocument('button[aria-label="Send"]') ||
+      queryDocument('button[aria-label="Submit"]') ||
+      queryDocument('button[aria-label="送出"]') ||
+      queryDocument('button[aria-label="提交"]') ||
+      queryDocument('button[aria-label="傳送"]') ||
+      queryDocument('button[type="submit"]') ||
+      queryDocument('button:has(svg[viewBox] path)')
     );
   }
 
   function setInputValue(el, text) {
     if (el.tagName === 'TEXTAREA') {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        'value',
-      )?.set;
-      if (nativeSetter) nativeSetter.call(el, text);
+      if (nativeTextAreaValueSetter) nativeTextAreaValueSetter.call(el, text);
       else el.value = text;
-      el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+      dispatchTargetEvent.call(el, new LocalEvent('input', { bubbles: true, cancelable: true }));
+      dispatchTargetEvent.call(el, new LocalEvent('change', { bubbles: true, cancelable: true }));
       return;
     }
 
     el.focus();
-    document.execCommand('selectAll', false, null);
-    if (document.execCommand('insertText', false, text) === false) {
+    execDocumentCommand('selectAll', false, null);
+    if (execDocumentCommand('insertText', false, text) === false) {
       throw new Error('Grok prompt insertion was rejected');
     }
-    el.dispatchEvent(new InputEvent('input', {
+    dispatchTargetEvent.call(el, new LocalInputEvent('input', {
       bubbles: true,
       cancelable: true,
       inputType: 'insertText',
@@ -68,7 +86,7 @@
   }
 
   function reportResult(requestId, ok) {
-    document.dispatchEvent(new CustomEvent(RESULT_EVENT, {
+    dispatchDocumentEvent(new LocalCustomEvent(resultEvent, {
       detail: { requestId, ok },
     }));
   }
@@ -82,7 +100,7 @@
   }
 
   function ensureNotExpired(expiresAt) {
-    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    if (!Number.isFinite(expiresAt) || now() > expiresAt) {
       throw new Error('Grok payload expired');
     }
   }
@@ -92,7 +110,7 @@
       ensureNotExpired(expiresAt);
       const inputEl = getInputEl();
       if (inputEl) return inputEl;
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+      await new Promise((resolve) => scheduleTimeout(resolve, POLL_INTERVAL));
     }
     throw new Error('Grok prompt editor is not available');
   }
@@ -105,13 +123,13 @@
       setInputValue(inputEl, text);
 
       if (autoSubmit) {
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        await new Promise((resolve) => scheduleTimeout(resolve, 800));
         ensureNotExpired(expiresAt);
         const submitEl = getSubmitEl();
         if (submitEl && !submitEl.disabled) {
           submitEl.click();
         } else {
-          inputEl.dispatchEvent(new KeyboardEvent('keydown', {
+          dispatchTargetEvent.call(inputEl, new LocalKeyboardEvent('keydown', {
             key: 'Enter',
             code: 'Enter',
             bubbles: true,
@@ -151,5 +169,37 @@
     void injectRequest(detail);
   }
 
-  document.addEventListener(REQUEST_EVENT, handleRequest);
+  addDocumentListener(requestEvent, handleRequest);
+
+  let bootstrapTimer;
+
+  function cleanupBootstrap() {
+    removeDocumentListener(BOOTSTRAP_REQUEST_EVENT, handleBootstrapRequest);
+    removeDocumentListener(BOOTSTRAP_ACCEPTED_EVENT, handleBootstrapAccepted);
+    cancelTimeout(bootstrapTimer);
+  }
+
+  function announceChannel() {
+    dispatchDocumentEvent(new LocalCustomEvent(BOOTSTRAP_READY_EVENT, {
+      detail: { bootstrapId, requestEvent, resultEvent },
+    }));
+  }
+
+  function handleBootstrapRequest(event) {
+    if (event.target === document) announceChannel();
+  }
+
+  function handleBootstrapAccepted(event) {
+    if (
+      event.target !== document
+      || !hasExactKeys(event.detail, ['bootstrapId'])
+      || event.detail.bootstrapId !== bootstrapId
+    ) return;
+    cleanupBootstrap();
+  }
+
+  addDocumentListener(BOOTSTRAP_REQUEST_EVENT, handleBootstrapRequest);
+  addDocumentListener(BOOTSTRAP_ACCEPTED_EVENT, handleBootstrapAccepted);
+  bootstrapTimer = scheduleTimeout(cleanupBootstrap, BOOTSTRAP_TIMEOUT);
+  announceChannel();
 })();
