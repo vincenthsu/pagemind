@@ -292,6 +292,31 @@ test('autosave writes only dirty keys and preserves unrelated last selections', 
   }
 });
 
+test('prompt selections and mutations persist synchronized default and last indices', async () => {
+  const harness = await bootOptions({ settings: { customPrompts: ['First'], defaultPromptIndex: 0 } });
+  try {
+    await harness.start();
+    const select = harness.document.getElementById('defaultPromptSelect');
+    select.value = '1';
+    await select.dispatch('change');
+    await waitForSave();
+    assert.deepEqual(harness.calls, [{ defaultPromptIndex: 1, lastPromptIndex: 1 }]);
+
+    harness.calls.length = 0;
+    const input = harness.document.getElementById('newPromptInput');
+    input.value = 'New prompt';
+    await harness.document.getElementById('addPromptBtn').dispatch('click');
+    await waitForSave();
+    assert.deepEqual(harness.calls, [{
+      customPrompts: ['New prompt', 'First'],
+      defaultPromptIndex: 2,
+      lastPromptIndex: 2,
+    }]);
+  } finally {
+    harness.restore();
+  }
+});
+
 test('an in-flight same-key autosave serializes the latest value', async () => {
   const harness = await bootOptions({ holdSaves: true });
   try {

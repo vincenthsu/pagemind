@@ -29,12 +29,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function registerEventListeners() {
   document.getElementById('addPromptBtn').addEventListener('click', () => {
-    if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex');
+    if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
   });
   document.getElementById('newPromptInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex');
+      if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
     }
   });
 
@@ -80,7 +80,7 @@ function registerEventListeners() {
 
   document.getElementById('defaultPromptSelect').addEventListener('change', (event) => {
     defaultPromptIndex = normalizePromptIndex(Number(event.target.value));
-    autoSave('defaultPromptIndex');
+    autoSave('defaultPromptIndex', 'lastPromptIndex');
   });
 }
 
@@ -223,7 +223,7 @@ function createPromptItem(prompt, index, type) {
     upButton.textContent = '↑';
     upButton.disabled = index === 0;
     upButton.addEventListener('click', () => {
-      if (movePrompt(index, -1)) autoSave('customPrompts', 'defaultPromptIndex');
+      if (movePrompt(index, -1)) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
     });
     item.appendChild(upButton);
 
@@ -233,7 +233,7 @@ function createPromptItem(prompt, index, type) {
     downButton.textContent = '↓';
     downButton.disabled = index === customPrompts.length - 1;
     downButton.addEventListener('click', () => {
-      if (movePrompt(index, 1)) autoSave('customPrompts', 'defaultPromptIndex');
+      if (movePrompt(index, 1)) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
     });
     item.appendChild(downButton);
 
@@ -243,7 +243,7 @@ function createPromptItem(prompt, index, type) {
     deleteButton.textContent = '✕';
     deleteButton.addEventListener('click', () => {
       removePrompt(index);
-      autoSave('customPrompts', 'defaultPromptIndex');
+      autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
     });
     item.appendChild(deleteButton);
   }
