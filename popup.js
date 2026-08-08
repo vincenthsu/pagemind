@@ -1,19 +1,20 @@
 // Popup script — handles provider selection, prompt selection, and summarize action
 
-import { DEFAULT_PROMPTS } from './lib/providers.js';
+import { DEFAULT_PROMPTS, PROVIDERS } from './lib/providers.js';
 import { normalizeOpenMode } from './lib/settings.js';
 
 let selectedProvider = 'chatgpt';
 let allPrompts = [];
 let openMode = 'companion';
+let sourceTabId = null;
 let sourceWindowId = null;
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   renderPrompts();
-  setupEventListeners();
   await updateButtonLabel();
+  setupEventListeners();
 });
 
 // Check if there's a selection on the active tab and update the button label
@@ -21,6 +22,7 @@ async function updateButtonLabel() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
+    sourceTabId = tab.id;
     if (Number.isInteger(tab.windowId)) sourceWindowId = tab.windowId;
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
@@ -40,29 +42,35 @@ async function updateButtonLabel() {
 
 async function loadSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(
-      ['lastProvider', 'lastPromptIndex', 'customPrompts', 'openMode'],
-      (data) => {
-        if (data.lastProvider) {
-          selectedProvider = data.lastProvider;
-        }
-
-        const customPrompts = data.customPrompts || [];
-        allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
-        openMode = normalizeOpenMode(data.openMode);
-
-        // Restore last prompt index (bounded to current list length)
-        const lastIndex = Math.min(
-          data.lastPromptIndex ?? 0,
-          allPrompts.length - 1
-        );
-        document.getElementById('promptSelect').dataset.lastIndex = lastIndex;
-
-        // Highlight the selected provider button
-        updateProviderButtons();
-        resolve();
+    const useSettings = (value) => {
+      const data = value && typeof value === 'object' ? value : {};
+      if (typeof data.lastProvider === 'string' && Object.hasOwn(PROVIDERS, data.lastProvider)) {
+        selectedProvider = data.lastProvider;
       }
-    );
+      const customPrompts = Array.isArray(data.customPrompts)
+        ? data.customPrompts.filter((prompt) => typeof prompt === 'string')
+        : [];
+      allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
+      openMode = normalizeOpenMode(data.openMode);
+      const requestedIndex = Number.isInteger(data.lastPromptIndex) && data.lastPromptIndex >= 0
+        ? data.lastPromptIndex
+        : 0;
+      document.getElementById('promptSelect').dataset.lastIndex = Math.min(
+        requestedIndex,
+        allPrompts.length - 1,
+      );
+      updateProviderButtons();
+      resolve();
+    };
+
+    try {
+      chrome.storage.sync.get(
+        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'openMode'],
+        (data) => useSettings(chrome.runtime.lastError ? {} : data),
+      );
+    } catch {
+      useSettings({});
+    }
   });
 }
 
@@ -121,11 +129,9 @@ async function handleSummarize() {
     const promptIndex = parseInt(document.getElementById('promptSelect').value, 10);
     let selectedText = '';
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) {
-        if (Number.isInteger(tab.windowId)) sourceWindowId = tab.windowId;
+      if (Number.isInteger(sourceTabId)) {
         const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
+          target: { tabId: sourceTabId, allFrames: true },
           func: () => window.getSelection().toString().trim(),
         });
         selectedText = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
@@ -147,6 +153,7 @@ async function handleSummarize() {
         provider: selectedProvider,
         promptIndex,
         selectedText,
+        sourceTabId,
         sourceWindowId,
         destination: openMode,
       },

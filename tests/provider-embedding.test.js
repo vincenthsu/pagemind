@@ -52,9 +52,19 @@ test('buildEmbeddingRules scopes sub-frame header removals to extension initiato
     });
     assert.deepEqual(rule.condition, {
       requestDomains: [rule.condition.requestDomains[0]],
+      regexFilter: rule.condition.regexFilter,
       initiatorDomains: ['abcdefghijklmnop'],
       resourceTypes: ['sub_frame'],
     });
+    const exactHost = rule.condition.requestDomains[0];
+    assert.equal(typeof rule.condition.regexFilter, 'string');
+    assert.doesNotMatch(rule.condition.regexFilter, /\(\?:/);
+    const filter = new RegExp(rule.condition.regexFilter);
+    assert.equal(filter.test(`https://${exactHost}/chat`), true);
+    assert.equal(filter.test(`https://${exactHost}:8443/chat`), true);
+    assert.equal(filter.test(`http://${exactHost}/chat`), false);
+    assert.equal(filter.test(`https://sub.${exactHost}/chat`), false);
+    assert.equal(filter.test(`https://${exactHost}.attacker.example/chat`), false);
   }
 });
 

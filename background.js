@@ -29,8 +29,12 @@ const TOOLBAR_SETTING_KEYS = [
 
 let cachedToolbarSettings = null;
 const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']);
-const pendingPayloadClaims = new Set();
 let pendingPayloadMutation = Promise.resolve();
+let latestEmbeddingCustomUrls = {};
+let embeddingRefreshGeneration = 0;
+let embeddingRefreshPromise = null;
+let embeddingSettingsRevision = 0;
+let latestScheduledEmbeddingRevision = -1;
 
 async function applyToolbarAction(settings = {}) {
   const toolbarAction = resolveToolbarAction(settings);
@@ -77,13 +81,47 @@ async function syncEmbeddingConfiguration(customUrls = {}) {
   }
 }
 
+function scheduleEmbeddingConfiguration(customUrls = {}, settingsRevision = embeddingSettingsRevision) {
+  if (settingsRevision < latestScheduledEmbeddingRevision) {
+    return embeddingRefreshPromise || Promise.resolve();
+  }
+  latestScheduledEmbeddingRevision = settingsRevision;
+  latestEmbeddingCustomUrls = customUrls && typeof customUrls === 'object'
+    ? { ...customUrls }
+    : {};
+  embeddingRefreshGeneration += 1;
+
+  if (!embeddingRefreshPromise) {
+    embeddingRefreshPromise = (async () => {
+      let completedGeneration = 0;
+      while (completedGeneration < embeddingRefreshGeneration) {
+        const requestedGeneration = embeddingRefreshGeneration;
+        const requestedCustomUrls = latestEmbeddingCustomUrls;
+        try {
+          await syncEmbeddingConfiguration(requestedCustomUrls);
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= embeddingRefreshGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      embeddingRefreshPromise = null;
+    });
+  }
+
+  return embeddingRefreshPromise;
+}
+
 async function initializeExtension(settingsPromise) {
+  const settingsRevision = embeddingSettingsRevision;
   const settings = await (settingsPromise
     || chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']));
   cachedToolbarSettings = { ...(cachedToolbarSettings || {}), ...settings };
   await Promise.all([
     applyToolbarAction(settings),
-    syncEmbeddingConfiguration(settings.customUrls || {}),
+    scheduleEmbeddingConfiguration(settings.customUrls || {}, settingsRevision),
   ]);
 }
 
@@ -113,7 +151,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       .catch((error) => console.error('[PageMind] Context menu update failed:', error));
   }
   if (changes.customUrls) {
-    void syncEmbeddingConfiguration(changes.customUrls.newValue || {})
+    embeddingSettingsRevision += 1;
+    void scheduleEmbeddingConfiguration(changes.customUrls.newValue || {}, embeddingSettingsRevision)
       .catch((error) => console.error('[PageMind] Embedding update failed:', error));
   }
 });
@@ -123,6 +162,7 @@ function startDirectSummaryFromAction(tab, settings) {
   if (!getToolbarChromeConfig(toolbarAction).directSummarize) return;
 
   const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+  const sourceTabId = Number.isInteger(tab?.id) ? tab.id : undefined;
   const destination = normalizeOpenMode(settings.openMode);
   let panelOpen = Promise.resolve();
   if (destination === 'sidepanel') {
@@ -139,6 +179,7 @@ function startDirectSummaryFromAction(tab, settings) {
   void panelOpen.then(() => handleSummarize({
     provider: settings.defaultProvider || 'chatgpt',
     promptIndex: settings.defaultPromptIndex ?? 0,
+    sourceTabId,
     sourceWindowId,
     source: 'toolbar',
     destination,
@@ -209,6 +250,7 @@ chrome.runtime.onInstalled.addListener(() => {
 async function summarizeFromContextMenu(info, tab, destination, panelOpen) {
   try {
     const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+    const sourceTabId = Number.isInteger(tab?.id) ? tab.id : undefined;
     await panelOpen;
     const settings = await chrome.storage.sync.get([
       'defaultProvider',
@@ -218,6 +260,7 @@ async function summarizeFromContextMenu(info, tab, destination, panelOpen) {
       provider: settings.defaultProvider || 'chatgpt',
       promptIndex: settings.defaultPromptIndex ?? 0,
       selectedText: typeof info.selectionText === 'string' ? info.selectionText.trim() : '',
+      sourceTabId,
       sourceWindowId,
       source: 'context-menu',
       destination,
@@ -297,32 +340,76 @@ function serializePendingPayloadMutation(operation) {
   return result;
 }
 
+function payloadRouteKey(target) {
+  if (target?.kind === 'tab' && Number.isInteger(target.tabId)) return `tab:${target.tabId}`;
+  if (target?.kind === 'sidepanel' && Number.isInteger(target.windowId)) {
+    return `sidepanel:${target.windowId}`;
+  }
+  return null;
+}
+
+function requestRouteKey(request) {
+  if (request?.context === 'tab' && Number.isInteger(request.tabId)) return `tab:${request.tabId}`;
+  if (request?.context === 'sidepanel' && Number.isInteger(request.windowId)) {
+    return `sidepanel:${request.windowId}`;
+  }
+  return null;
+}
+
+function payloadRequest(payload) {
+  if (payload?.target?.kind === 'tab') {
+    return { provider: payload.provider, context: 'tab', tabId: payload.target.tabId };
+  }
+  return {
+    provider: payload?.provider,
+    context: 'sidepanel',
+    windowId: payload?.target?.windowId,
+  };
+}
+
+async function readPendingPayloadRoutes(now = Date.now()) {
+  const data = await chrome.storage.session.get(['pendingPayloads', 'pendingPayload']);
+  const routes = {};
+  let dirty = data.pendingPayload !== undefined;
+
+  if (data.pendingPayloads && typeof data.pendingPayloads === 'object' && !Array.isArray(data.pendingPayloads)) {
+    for (const payload of Object.values(data.pendingPayloads)) {
+      const key = payloadRouteKey(payload?.target);
+      if (!key || matchPayloadRequest(payload, payloadRequest(payload), now).expired) {
+        dirty = true;
+        continue;
+      }
+      routes[key] = payload;
+    }
+  } else if (data.pendingPayloads !== undefined) {
+    dirty = true;
+  }
+
+  if (data.pendingPayload) {
+    const legacyKey = payloadRouteKey(data.pendingPayload.target);
+    if (legacyKey
+      && !routes[legacyKey]
+      && !matchPayloadRequest(data.pendingPayload, payloadRequest(data.pendingPayload), now).expired) {
+      routes[legacyKey] = data.pendingPayload;
+    }
+  }
+  return { dirty, hadLegacy: data.pendingPayload !== undefined, routes };
+}
+
+async function persistPendingPayloadRoutes(state) {
+  await chrome.storage.session.set({ pendingPayloads: state.routes });
+  if (state.hadLegacy) await chrome.storage.session.remove(['pendingPayload']);
+}
+
 function storePendingPayload(payload) {
-  return serializePendingPayloadMutation(() => (
-    chrome.storage.session.set({ pendingPayload: payload })
-  ));
-}
-
-function removePendingPayloadIfExpected(expectedId) {
-  if (typeof expectedId !== 'string' || expectedId.length === 0) return Promise.resolve(false);
   return serializePendingPayloadMutation(async () => {
-    const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
-    if (pendingPayload?.id !== expectedId) return false;
-    await chrome.storage.session.remove(['pendingPayload']);
-    return true;
-  });
-}
-
-function isPendingPayloadCurrent(expectedId) {
-  if (typeof expectedId !== 'string' || expectedId.length === 0) return Promise.resolve(false);
-  return serializePendingPayloadMutation(async () => {
-    const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
-    return pendingPayload?.id === expectedId;
+    const state = await readPendingPayloadRoutes();
+    state.routes[payloadRouteKey(payload.target)] = payload;
+    await persistPendingPayloadRoutes(state);
   });
 }
 
 async function consumePendingPayload(message, sender) {
-  const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
   if (message.context === 'tab' && sender.frameId !== 0) {
     return { payload: null };
   }
@@ -335,21 +422,30 @@ async function consumePendingPayload(message, sender) {
     windowId: Number.isInteger(message.windowId) ? message.windowId : undefined,
     tabId: Number.isInteger(sender.tab?.id) ? sender.tab.id : undefined,
   };
-  const result = matchPayloadRequest(pendingPayload, request);
+  return serializePendingPayloadMutation(async () => {
+    const snapshot = await readPendingPayloadRoutes();
+    const key = requestRouteKey(request);
+    const snapshotPayload = key ? snapshot.routes[key] : null;
+    const snapshotResult = matchPayloadRequest(snapshotPayload, request);
 
-  if (result.expired) {
-    await removePendingPayloadIfExpected(pendingPayload?.id);
-  }
-  if (!result.matched) return { payload: null };
-
-  if (pendingPayloadClaims.has(pendingPayload.id)) return { payload: null };
-  pendingPayloadClaims.add(pendingPayload.id);
-  try {
-    const removed = await removePendingPayloadIfExpected(pendingPayload.id);
-    return { payload: removed ? pendingPayload : null };
-  } finally {
-    pendingPayloadClaims.delete(pendingPayload.id);
-  }
+    // Re-read immediately before mutation so an entry written after the first
+    // snapshot is never removed or delivered as the older route payload.
+    const state = await readPendingPayloadRoutes();
+    const payload = key ? state.routes[key] : null;
+    const result = snapshotResult.matched
+      ? matchPayloadRequest(payload, request)
+      : { matched: false, expired: false };
+    if (snapshotResult.matched && result.matched && payload.id === snapshotPayload.id) {
+      delete state.routes[key];
+      state.dirty = true;
+    }
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return {
+      payload: snapshotResult.matched && result.matched && payload.id === snapshotPayload.id
+        ? payload
+        : null,
+    };
+  });
 }
 
 function isTrustedSidePanelSender(sender) {
@@ -363,23 +459,19 @@ function isTrustedSidePanelSender(sender) {
   }
 }
 
-async function getPendingPanelProvider(message) {
-  const { pendingPayload } = await chrome.storage.session.get(['pendingPayload']);
-  if (!Number.isInteger(message.windowId) || pendingPayload?.target?.kind !== 'sidepanel') {
+async function getPendingPanelProvider(message, sender) {
+  if (!isTrustedSidePanelSender(sender) || !Number.isInteger(message.windowId)) {
     return { provider: null };
   }
-
-  const result = matchPayloadRequest(pendingPayload, {
-    provider: pendingPayload.provider,
-    context: 'sidepanel',
-    windowId: message.windowId,
+  return serializePendingPayloadMutation(async () => {
+    await readPendingPayloadRoutes();
+    // PANEL_READY also revalidates after its first snapshot so it cannot
+    // reveal or clean up a route that has since been superseded.
+    const state = await readPendingPayloadRoutes();
+    const payload = state.routes[`sidepanel:${message.windowId}`];
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return { provider: payload?.provider || null };
   });
-  if (result.expired) {
-    await removePendingPayloadIfExpected(pendingPayload?.id);
-  }
-  if (!result.matched) return { provider: null };
-  const isCurrent = await isPendingPayloadCurrent(pendingPayload.id);
-  return { provider: isCurrent ? pendingPayload.provider : null };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -392,7 +484,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return sendAsyncResponse(consumePendingPayload(message, sender), sendResponse);
   }
   if (message.type === 'PANEL_READY') {
-    return sendAsyncResponse(getPendingPanelProvider(message), sendResponse);
+    return sendAsyncResponse(getPendingPanelProvider(message, sender), sendResponse);
   }
 
   // PANEL_NAVIGATE is intentionally handled by the side-panel shell.
@@ -403,6 +495,7 @@ async function handleSummarize({
   provider,
   promptIndex,
   selectedText = '',
+  sourceTabId,
   sourceWindowId,
   source,
   destination,
@@ -411,10 +504,18 @@ async function handleSummarize({
     throw new Error(`Unknown provider: ${String(provider)}`);
   }
 
-  const query = { active: true };
-  if (Number.isInteger(sourceWindowId)) query.windowId = sourceWindowId;
-  else query.currentWindow = true;
-  const [activeTab] = await chrome.tabs.query(query);
+  let activeTab;
+  if (Number.isInteger(sourceTabId)) {
+    activeTab = await chrome.tabs.get(sourceTabId);
+    if (Number.isInteger(sourceWindowId) && activeTab?.windowId !== sourceWindowId) {
+      throw new Error('Source tab does not belong to the source window');
+    }
+  } else {
+    const query = { active: true };
+    if (Number.isInteger(sourceWindowId)) query.windowId = sourceWindowId;
+    else query.currentWindow = true;
+    [activeTab] = await chrome.tabs.query(query);
+  }
   if (!Number.isInteger(activeTab?.id)) throw new Error('No active tab found');
 
   const tabUrl = typeof activeTab.url === 'string' ? activeTab.url : '';
