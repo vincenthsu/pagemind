@@ -369,6 +369,306 @@ test('toolbar panel behavior suppresses clicks only for the dedicated side-panel
   });
 });
 
+test('a delayed startup read cannot regress newer toolbar settings or context menus', async () => {
+  const harness = createChrome({
+    deferFirstSyncGet: true,
+    sync: {
+      toolbarAction: 'sidepanel', openMode: 'companion', defaultProvider: 'chatgpt',
+      defaultPromptIndex: 0, includeUrl: false,
+    },
+    activeTab: { id: 61, windowId: 31, url: 'https://source.example/', title: 'Source' },
+  });
+  await loadBackground(harness);
+
+  Object.assign(harness.syncData, {
+    toolbarAction: 'summarize', openMode: 'sidepanel', defaultProvider: 'claude',
+    defaultPromptIndex: 1,
+  });
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: 'summarize' },
+    openMode: { newValue: 'sidepanel' },
+    defaultProvider: { newValue: 'claude' },
+    defaultPromptIndex: { newValue: 1 },
+  }, 'sync');
+  for (let index = 0; index < 5; index += 1) await tick();
+  harness.releaseFirstSyncGet();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: false,
+  });
+  assert.equal(callOf(harness, 'contextMenus.create').at(-3).value.id, 'summarize-page-sidepanel');
+  harness.calls.length = 0;
+  assert.equal(harness.clickAction({ id: 61, windowId: 31 }), true);
+  for (let index = 0; index < 8; index += 1) await tick();
+  const pending = routedPayload(harness, 'sidepanel', 31);
+  assert.equal(pending.provider, 'claude');
+  assert.match(pending.text, /key takeaways/i);
+});
+
+test('a stale initializer is ignored before the newer settings read has completed', async () => {
+  const harness = createChrome({
+    sync: {
+      toolbarAction: 'sidepanel', openMode: 'companion', defaultProvider: 'chatgpt',
+      defaultPromptIndex: 0, includeUrl: false,
+    },
+    activeTab: { id: 63, windowId: 33, url: 'https://source.example/', title: 'Source' },
+  });
+  const originalGet = harness.chrome.storage.sync.get.bind(harness.chrome.storage.sync);
+  const releases = [];
+  let deferredToolbarReads = 0;
+  harness.chrome.storage.sync.get = (keys, callback) => {
+    if (!callback && Array.isArray(keys) && keys.includes('toolbarAction') && deferredToolbarReads < 2) {
+      deferredToolbarReads += 1;
+      const snapshot = pick(harness.syncData, keys);
+      return new Promise((resolve) => {
+        releases.push(() => resolve(snapshot));
+      });
+    }
+    return originalGet(keys, callback);
+  };
+  await loadBackground(harness);
+
+  Object.assign(harness.syncData, {
+    toolbarAction: 'summarize', openMode: 'sidepanel', defaultProvider: 'claude',
+    defaultPromptIndex: 1,
+  });
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: 'summarize' },
+    openMode: { newValue: 'sidepanel' },
+    defaultProvider: { newValue: 'claude' },
+    defaultPromptIndex: { newValue: 1 },
+  }, 'sync');
+  assert.equal(releases.length, 2);
+
+  releases[0]();
+  for (let index = 0; index < 5; index += 1) await tick();
+  assert.equal(callOf(harness, 'sidePanel.setPanelBehavior').length, 0);
+  assert.equal(harness.clickAction({ id: 63, windowId: 33 }), true);
+  for (let index = 0; index < 8; index += 1) await tick();
+  assert.equal(routedPayload(harness, 'sidepanel', 33).provider, 'claude');
+
+  releases[1]();
+  for (let index = 0; index < 8; index += 1) await tick();
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: false,
+  });
+});
+
+test('a partial cold-worker cache still uses a fresh gesture-bound toolbar read', async () => {
+  const harness = createChrome({
+    sync: {
+      toolbarAction: 'summarize', openMode: 'sidepanel', defaultProvider: 'claude',
+      defaultPromptIndex: 0, includeUrl: false,
+    },
+    activeTab: { id: 64, windowId: 34, url: 'https://source.example/', title: 'Source' },
+  });
+  const originalGet = harness.chrome.storage.sync.get.bind(harness.chrome.storage.sync);
+  const releases = [];
+  let deferredToolbarReads = 0;
+  harness.chrome.storage.sync.get = (keys, callback) => {
+    if (!callback && Array.isArray(keys) && keys.includes('toolbarAction') && deferredToolbarReads < 2) {
+      deferredToolbarReads += 1;
+      const snapshot = pick(harness.syncData, keys);
+      return new Promise((resolve) => {
+        releases.push(() => resolve(snapshot));
+      });
+    }
+    return originalGet(keys, callback);
+  };
+  await loadBackground(harness);
+
+  harness.syncData.defaultPromptIndex = 1;
+  await harness.events.storageChanged.emit({ defaultPromptIndex: { newValue: 1 } }, 'sync');
+  assert.equal(releases.length, 2);
+  assert.equal(harness.clickAction({ id: 64, windowId: 34 }), true);
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.deepEqual(callOf(harness, 'sidePanel.open')[0].value, { windowId: 34 });
+  const pending = routedPayload(harness, 'sidepanel', 34);
+  assert.equal(pending.provider, 'claude');
+  assert.match(pending.text, /key takeaways/i);
+  for (const release of releases) release();
+});
+
+test('a delayed onInstalled read cannot regress newer toolbar settings or menu mode', async () => {
+  const harness = createChrome({
+    sync: {
+      toolbarAction: 'sidepanel', openMode: 'companion', defaultProvider: 'chatgpt',
+      defaultPromptIndex: 0, includeUrl: false,
+    },
+    activeTab: { id: 62, windowId: 32, url: 'https://source.example/', title: 'Source' },
+  });
+  await loadBackground(harness);
+  harness.calls.length = 0;
+
+  const originalGet = harness.chrome.storage.sync.get.bind(harness.chrome.storage.sync);
+  const staleReadReleases = [];
+  let captureStaleReads = true;
+  let markStaleReadStarted;
+  const staleReadStarted = new Promise((resolve) => {
+    markStaleReadStarted = resolve;
+  });
+  harness.chrome.storage.sync.get = (keys, callback) => {
+    if (captureStaleReads && !callback) {
+      const snapshot = pick(harness.syncData, keys);
+      markStaleReadStarted();
+      return new Promise((resolve) => {
+        staleReadReleases.push(() => resolve(snapshot));
+      });
+    }
+    return originalGet(keys, callback);
+  };
+  await harness.events.installed.emit();
+  await staleReadStarted;
+  await tick();
+  captureStaleReads = false;
+
+  Object.assign(harness.syncData, {
+    toolbarAction: 'summarize', openMode: 'sidepanel', defaultProvider: 'claude',
+    defaultPromptIndex: 1,
+  });
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: 'summarize' },
+    openMode: { newValue: 'sidepanel' },
+    defaultProvider: { newValue: 'claude' },
+    defaultPromptIndex: { newValue: 1 },
+  }, 'sync');
+  for (let index = 0; index < 5; index += 1) await tick();
+  for (const release of staleReadReleases) release();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: false,
+  });
+  assert.equal(callOf(harness, 'contextMenus.create').at(-3).value.id, 'summarize-page-sidepanel');
+  harness.calls.length = 0;
+  assert.equal(harness.clickAction({ id: 62, windowId: 32 }), true);
+  for (let index = 0; index < 8; index += 1) await tick();
+  const pending = routedPayload(harness, 'sidepanel', 32);
+  assert.equal(pending.provider, 'claude');
+  assert.match(pending.text, /key takeaways/i);
+});
+
+test('overlapping toolbar applications finish with the latest Chrome action configuration', async () => {
+  const harness = createChrome({ sync: { toolbarAction: 'sidepanel', openMode: 'companion' } });
+  await loadBackground(harness);
+  let appliedPopup;
+  let setPopupCount = 0;
+  let releaseOlderPopup;
+  let markOlderPopupStarted;
+  const olderPopupStarted = new Promise((resolve) => {
+    markOlderPopupStarted = resolve;
+  });
+  harness.chrome.action.setPopup = async ({ popup }) => {
+    setPopupCount += 1;
+    if (setPopupCount === 1) {
+      markOlderPopupStarted();
+      await new Promise((resolve) => {
+        releaseOlderPopup = resolve;
+      });
+    }
+    appliedPopup = popup;
+  };
+
+  harness.syncData.toolbarAction = 'popup';
+  await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'popup' } }, 'sync');
+  await olderPopupStarted;
+  harness.syncData.toolbarAction = 'summarize';
+  await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'summarize' } }, 'sync');
+  for (let index = 0; index < 4; index += 1) await tick();
+  releaseOlderPopup();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.equal(appliedPopup, '');
+  assert.equal(setPopupCount, 2);
+});
+
+test('a rejected stale toolbar API cannot leave its sibling racing the latest application', async () => {
+  const harness = createChrome({ sync: { toolbarAction: 'popup', openMode: 'companion' } });
+  await loadBackground(harness);
+  let setPopupCount = 0;
+  let panelCount = 0;
+  let appliedPanelBehavior;
+  let releaseOlderPanel;
+  let markOlderPanelStarted;
+  const olderPanelStarted = new Promise((resolve) => {
+    markOlderPanelStarted = resolve;
+  });
+  harness.chrome.action.setPopup = async () => {
+    setPopupCount += 1;
+    if (setPopupCount === 1) throw new Error('simulated stale popup failure');
+  };
+  harness.chrome.sidePanel.setPanelBehavior = async ({ openPanelOnActionClick }) => {
+    panelCount += 1;
+    if (panelCount === 1) {
+      markOlderPanelStarted();
+      await new Promise((resolve) => {
+        releaseOlderPanel = resolve;
+      });
+    }
+    appliedPanelBehavior = openPanelOnActionClick;
+  };
+
+  harness.syncData.toolbarAction = 'sidepanel';
+  await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'sidepanel' } }, 'sync');
+  await olderPanelStarted;
+  harness.syncData.toolbarAction = 'summarize';
+  await harness.events.storageChanged.emit({ toolbarAction: { newValue: 'summarize' } }, 'sync');
+  for (let index = 0; index < 5; index += 1) await tick();
+  releaseOlderPanel();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.equal(setPopupCount, 2);
+  assert.equal(panelCount, 2);
+  assert.equal(appliedPanelBehavior, false);
+});
+
+test('a superseded toolbar migration cannot overwrite the latest persisted action', async () => {
+  const harness = createChrome({ sync: { toolbarAction: 'sidepanel', openMode: 'companion' } });
+  await loadBackground(harness);
+  const originalSet = harness.chrome.storage.sync.set.bind(harness.chrome.storage.sync);
+  let blockFirstMigration = true;
+  let releaseOlderMigration;
+  let markOlderMigrationStarted;
+  const olderMigrationStarted = new Promise((resolve) => {
+    markOlderMigrationStarted = resolve;
+  });
+  harness.chrome.storage.sync.set = async (values, callback) => {
+    if (blockFirstMigration && values.toolbarAction === 'popup') {
+      blockFirstMigration = false;
+      markOlderMigrationStarted();
+      await new Promise((resolve) => {
+        releaseOlderMigration = resolve;
+      });
+    }
+    return originalSet(values, callback);
+  };
+
+  delete harness.syncData.toolbarAction;
+  harness.syncData.quickSummarize = false;
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: undefined },
+    quickSummarize: { newValue: false },
+  }, 'sync');
+  await olderMigrationStarted;
+
+  harness.syncData.toolbarAction = 'summarize';
+  harness.syncData.quickSummarize = true;
+  await harness.events.storageChanged.emit({
+    toolbarAction: { newValue: 'summarize' },
+    quickSummarize: { newValue: true },
+  }, 'sync');
+  await tick();
+  releaseOlderMigration();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.equal(harness.syncData.toolbarAction, 'summarize');
+  assert.deepEqual(callOf(harness, 'sidePanel.setPanelBehavior').at(-1).value, {
+    openPanelOnActionClick: false,
+  });
+});
+
 test('embedding synchronization replaces only managed rules and only registered PageMind custom scripts', async () => {
   const harness = createChrome({
     sync: { customUrls: { chatgpt: 'https://custom.example.com/chat' } },
@@ -559,6 +859,38 @@ test('context menus install idempotently, encode destination, and track open-mod
   assert.deepEqual(callOf(harness, 'sidePanel.open').at(-1).value, { windowId: 19 });
   await harness.events.contextClicked.listener({ menuItemId: 'open-settings' }, { id: 55, windowId: 19 });
   assert.equal(callOf(harness, 'runtime.openOptionsPage').length, 1);
+});
+
+test('a failed stale context-menu update still applies the newer open mode', async () => {
+  const harness = createChrome({ sync: { openMode: 'companion' } });
+  await loadBackground(harness);
+  let removeCount = 0;
+  let releaseFailedRemoval;
+  let markFailedRemovalStarted;
+  const failedRemovalStarted = new Promise((resolve) => {
+    markFailedRemovalStarted = resolve;
+  });
+  harness.chrome.contextMenus.removeAll = async () => {
+    removeCount += 1;
+    if (removeCount === 1) {
+      markFailedRemovalStarted();
+      await new Promise((resolve) => {
+        releaseFailedRemoval = resolve;
+      });
+      throw new Error('simulated stale menu failure');
+    }
+  };
+
+  harness.syncData.openMode = 'sidepanel';
+  await harness.events.storageChanged.emit({ openMode: { newValue: 'sidepanel' } }, 'sync');
+  await failedRemovalStarted;
+  harness.syncData.openMode = 'newtab';
+  await harness.events.storageChanged.emit({ openMode: { newValue: 'newtab' } }, 'sync');
+  releaseFailedRemoval();
+  for (let index = 0; index < 8; index += 1) await tick();
+
+  assert.equal(removeCount, 2);
+  assert.equal(callOf(harness, 'contextMenus.create').at(-3).value.id, 'summarize-page-newtab');
 });
 
 test('cold context-menu summarization opens the panel synchronously before activation expires', async () => {
@@ -873,6 +1205,36 @@ test('payload route reads prune malformed entries while preserving valid unmatch
   assert.deepEqual(routedPayloads(harness), [valid]);
 });
 
+test('storing a route caps the collection by evicting the oldest unrelated payload', async () => {
+  const now = Date.now();
+  const pendingPayloads = Object.fromEntries(Array.from({ length: 32 }, (_, index) => {
+    const tabId = 100 + index;
+    return [`tab:${tabId}`, createPendingPayload({
+      id: `payload-${tabId}`,
+      text: `Payload ${tabId}`,
+      provider: 'claude',
+      target: { kind: 'tab', tabId },
+      createdAt: now - 1_000 + index,
+    })];
+  }));
+  const harness = createChrome({
+    sync: { openMode: 'newtab', includeUrl: false },
+    session: { pendingPayloads },
+  });
+  await loadBackground(harness);
+
+  await sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'chatgpt', promptIndex: 0, selectedText: 'Newest route',
+    sourceTabId: 41, sourceWindowId: 7, destination: 'newtab',
+  });
+
+  assert.equal(routedPayloads(harness).length, 32);
+  assert.equal(routedPayload(harness, 'tab', 100), undefined);
+  assert.equal(routedPayload(harness, 'tab', 101).id, 'payload-101');
+  assert.equal(routedPayload(harness, 'tab', 131).id, 'payload-131');
+  assert.match(routedPayload(harness, 'tab', 800).text, /Newest route/);
+});
+
 test('new-tab summaries create the exact destination before storing a tab-targeted payload', async () => {
   const harness = createChrome({
     sync: {
@@ -957,61 +1319,129 @@ test('summaries targeting two provider tabs coexist and consuming one preserves 
   assert.equal(routedPayload(harness, 'tab', 801).provider, 'claude');
 });
 
-test('interleaved side-panel providers coexist by window and supersede only their own route', async () => {
+test('a newer side-panel invocation supersedes slow work only in its own window', async () => {
   const harness = createChrome({
     sync: { openMode: 'sidepanel', includeUrl: false },
     activeTab: { id: 111, windowId: 21, url: 'https://one.example/', title: 'One' },
   });
   await loadBackground(harness);
   harness.setActiveTab({ id: 112, windowId: 22, url: 'https://two.example/', title: 'Two' });
-  let releaseOldNavigation;
-  let markOldNavigationStarted;
-  const oldNavigationStarted = new Promise((resolve) => {
-    markOldNavigationStarted = resolve;
+  harness.calls.length = 0;
+  const extractionReleases = new Map();
+  let slowExtractionCount = 0;
+  let markSlowExtractionsStarted;
+  const slowExtractionsStarted = new Promise((resolve) => {
+    markSlowExtractionsStarted = resolve;
   });
-  harness.chrome.runtime.sendMessage = (message, callback) => {
-    harness.calls.push({ type: 'runtime.sendMessage', message });
-    if (message.type === 'PANEL_NAVIGATE' && message.provider === 'chatgpt') {
-      markOldNavigationStarted();
+  harness.chrome.scripting.executeScript = async (value) => {
+    harness.calls.push({ type: 'scripting.executeScript', value });
+    if (value.files?.includes('content/extractor.js')) {
+      slowExtractionCount += 1;
+      if (slowExtractionCount === 2) markSlowExtractionsStarted();
       return new Promise((resolve) => {
-        releaseOldNavigation = () => {
-          callback?.({ success: true });
-          resolve({ success: true });
-        };
+        extractionReleases.set(value.target.tabId, () => resolve([{
+          result: `Slow content from tab ${value.target.tabId}`,
+        }]));
       });
     }
-    callback?.({ success: true });
-    return Promise.resolve({ success: true });
+    return [{ result: '' }];
   };
 
   const olderWindowOne = sendRuntimeMessage(harness, {
-    type: 'SUMMARIZE', provider: 'chatgpt', promptIndex: 0, selectedText: 'Window one old',
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0,
     sourceTabId: 111, sourceWindowId: 21, destination: 'sidepanel',
   });
-  await oldNavigationStarted;
-  await sendRuntimeMessage(harness, {
-    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Window two',
+  const windowTwo = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0,
     sourceTabId: 112, sourceWindowId: 22, destination: 'sidepanel',
   });
-  await sendRuntimeMessage(harness, {
-    type: 'SUMMARIZE', provider: 'grok', promptIndex: 0, selectedText: 'Window one new',
+  await slowExtractionsStarted;
+
+  const newerWindowOne = await sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Window one new',
     sourceTabId: 111, sourceWindowId: 21, destination: 'sidepanel',
   });
-  releaseOldNavigation();
-  await olderWindowOne;
+  extractionReleases.get(111)();
+  extractionReleases.get(112)();
+  const [olderWindowOneResult, windowTwoResult] = await Promise.all([olderWindowOne, windowTwo]);
+
+  assert.equal(newerWindowOne.success, true);
+  assert.deepEqual(olderWindowOneResult, {
+    success: true,
+    superseded: true,
+    destination: 'sidepanel',
+    provider: 'claude',
+    url: 'https://claude.ai/new',
+  });
+  assert.equal(windowTwoResult.success, true);
 
   assert.equal(routedPayloads(harness).length, 2);
-  assert.equal(routedPayload(harness, 'sidepanel', 21).provider, 'grok');
+  assert.equal(routedPayload(harness, 'sidepanel', 21).provider, 'claude');
   assert.match(routedPayload(harness, 'sidepanel', 21).text, /Window one new/);
   assert.equal(routedPayload(harness, 'sidepanel', 22).provider, 'claude');
+  assert.match(routedPayload(harness, 'sidepanel', 22).text, /Slow content from tab 112/);
+  const navigations = callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE');
+  assert.deepEqual(navigations.map((call) => call.message.windowId).sort(), [21, 22]);
+  const clipboardWrites = callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'WRITE_CLIPBOARD');
+  assert.equal(clipboardWrites.length, 2);
+  const settingsReadIndex = harness.calls.findIndex((call) => (
+    call.type === 'sync.get' && call.keys.includes('customPrompts')
+  ));
+  const extractionIndex = harness.calls.findIndex((call) => (
+    call.type === 'scripting.executeScript' && call.value.files?.includes('content/extractor.js')
+  ));
+  assert.ok(settingsReadIndex >= 0 && settingsReadIndex < extractionIndex);
+});
 
-  const panelSender = { url: 'chrome-extension://abcdefghijklmnop/sidepanel.html' };
-  assert.deepEqual(await sendRuntimeMessage(harness, {
-    type: 'PANEL_READY', windowId: 22,
-  }, panelSender), { provider: 'claude' });
-  assert.deepEqual(await sendRuntimeMessage(harness, {
-    type: 'PANEL_READY', windowId: 21,
-  }, panelSender), { provider: 'grok' });
+test('a side-panel invocation superseded during storage cannot leave or navigate its payload', async () => {
+  const harness = createChrome({
+    sync: { openMode: 'sidepanel', includeUrl: false },
+    activeTab: { id: 113, windowId: 23, url: 'https://source.example/', title: 'Source' },
+  });
+  await loadBackground(harness);
+  harness.calls.length = 0;
+
+  const originalSet = harness.chrome.storage.session.set.bind(harness.chrome.storage.session);
+  let blockFirstPayloadSet = true;
+  let releaseOlderPayloadSet;
+  let markOlderPayloadSetStarted;
+  const olderPayloadSetStarted = new Promise((resolve) => {
+    markOlderPayloadSetStarted = resolve;
+  });
+  harness.chrome.storage.session.set = async (values, callback) => {
+    if (blockFirstPayloadSet && values.pendingPayloads) {
+      blockFirstPayloadSet = false;
+      markOlderPayloadSetStarted();
+      await new Promise((resolve) => {
+        releaseOlderPayloadSet = resolve;
+      });
+    }
+    return originalSet(values, callback);
+  };
+
+  const older = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Older payload',
+    sourceTabId: 113, sourceWindowId: 23, destination: 'sidepanel',
+  });
+  await olderPayloadSetStarted;
+  const newer = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Newer payload',
+    sourceTabId: 113, sourceWindowId: 23, destination: 'sidepanel',
+  });
+  await tick();
+  releaseOlderPayloadSet();
+  const [olderResult, newerResult] = await Promise.all([older, newer]);
+
+  assert.equal(olderResult.superseded, true);
+  assert.equal(newerResult.success, true);
+  const pending = routedPayload(harness, 'sidepanel', 23);
+  assert.match(pending.text, /Newer payload/);
+  assert.doesNotMatch(pending.text, /Older payload/);
+  const navigations = callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE');
+  assert.equal(navigations.length, 1);
 });
 
 test('side-panel sources override another requested destination and navigate only after targeted storage', async () => {

@@ -17,6 +17,7 @@ import {
 import { createPendingPayload, matchPayloadRequest } from './lib/payload-routing.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
+const MAX_PENDING_PAYLOAD_ROUTES = 32;
 const MANAGED_RULE_ID_MIN = 1000;
 const MANAGED_RULE_ID_MAX = 2000;
 const TOOLBAR_SETTING_KEYS = [
@@ -28,29 +29,134 @@ const TOOLBAR_SETTING_KEYS = [
 ];
 
 let cachedToolbarSettings = null;
+let toolbarSettingsCacheReady = false;
 const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']);
 let pendingPayloadMutation = Promise.resolve();
+let toolbarSettingsRevision = 0;
+let latestScheduledToolbarRevision = -1;
+let latestToolbarSettings = {};
+let toolbarApplyGeneration = 0;
+let toolbarApplyPromise = null;
+let openModeRevision = 0;
+let latestScheduledMenuRevision = -1;
+let latestMenuOpenMode;
+let menuApplyGeneration = 0;
+let menuApplyPromise = null;
 let latestEmbeddingCustomUrls = {};
 let embeddingRefreshGeneration = 0;
 let embeddingRefreshPromise = null;
 let embeddingSettingsRevision = 0;
 let latestScheduledEmbeddingRevision = -1;
+let nextSidePanelInvocationGeneration = 0;
+const sidePanelInvocationGenerations = new Map();
 
-async function applyToolbarAction(settings = {}) {
+async function applyToolbarAction(
+  settings = {},
+  isCurrent = () => true,
+  forceToolbarActionPersistence = false,
+) {
   const toolbarAction = resolveToolbarAction(settings);
   const config = getToolbarChromeConfig(toolbarAction);
-  cachedToolbarSettings = { ...(cachedToolbarSettings || {}), ...settings, toolbarAction };
 
-  await Promise.all([
+  const chromeResults = await Promise.allSettled([
     chrome.action.setPopup({ popup: config.popup }),
     chrome.sidePanel.setPanelBehavior({
       openPanelOnActionClick: config.openPanelOnActionClick,
     }),
   ]);
+  const failedChromeOperation = chromeResults.find((result) => result.status === 'rejected');
+  if (failedChromeOperation) throw failedChromeOperation.reason;
 
-  if (settings.toolbarAction !== toolbarAction) {
+  let persistedToolbarAction = false;
+  if (isCurrent()
+    && (forceToolbarActionPersistence || settings.toolbarAction !== toolbarAction)) {
     await chrome.storage.sync.set({ toolbarAction });
+    persistedToolbarAction = true;
   }
+  return { persistedToolbarAction };
+}
+
+function scheduleToolbarAction(settings = {}, settingsRevision = toolbarSettingsRevision) {
+  if (settingsRevision < toolbarSettingsRevision
+    || settingsRevision < latestScheduledToolbarRevision) {
+    return toolbarApplyPromise || Promise.resolve();
+  }
+  latestScheduledToolbarRevision = settingsRevision;
+  latestToolbarSettings = settings && typeof settings === 'object' ? { ...settings } : {};
+  toolbarApplyGeneration += 1;
+
+  if (!toolbarApplyPromise) {
+    toolbarApplyPromise = (async () => {
+      let completedGeneration = 0;
+      let forceToolbarActionPersistence = false;
+      while (completedGeneration < toolbarApplyGeneration) {
+        const requestedGeneration = toolbarApplyGeneration;
+        const requestedSettings = latestToolbarSettings;
+        const toolbarAction = resolveToolbarAction(requestedSettings);
+        cachedToolbarSettings = {
+          ...(cachedToolbarSettings || {}),
+          ...requestedSettings,
+          toolbarAction,
+        };
+        toolbarSettingsCacheReady = true;
+        try {
+          const persistenceWasRequired = forceToolbarActionPersistence;
+          const result = await applyToolbarAction(
+            requestedSettings,
+            () => requestedGeneration === toolbarApplyGeneration,
+            forceToolbarActionPersistence,
+          );
+          const requestIsCurrent = requestedGeneration === toolbarApplyGeneration;
+          forceToolbarActionPersistence = persistenceWasRequired
+            ? !(result.persistedToolbarAction && requestIsCurrent)
+            : result.persistedToolbarAction && !requestIsCurrent;
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= toolbarApplyGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      toolbarApplyPromise = null;
+    });
+  }
+
+  return toolbarApplyPromise;
+}
+
+function scheduleContextMenus(openMode, menuRevision = openModeRevision) {
+  if (menuRevision < openModeRevision || menuRevision < latestScheduledMenuRevision) {
+    return menuApplyPromise || Promise.resolve();
+  }
+  latestScheduledMenuRevision = menuRevision;
+  latestMenuOpenMode = openMode;
+  menuApplyGeneration += 1;
+
+  if (!menuApplyPromise) {
+    menuApplyPromise = (async () => {
+      let completedGeneration = 0;
+      while (completedGeneration < menuApplyGeneration) {
+        const requestedGeneration = menuApplyGeneration;
+        const requestedOpenMode = latestMenuOpenMode;
+        try {
+          await createContextMenus(
+            requestedOpenMode,
+            () => requestedGeneration === menuApplyGeneration,
+          );
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= menuApplyGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      menuApplyPromise = null;
+    });
+  }
+
+  return menuApplyPromise;
 }
 
 async function syncEmbeddingConfiguration(customUrls = {}) {
@@ -114,15 +220,20 @@ function scheduleEmbeddingConfiguration(customUrls = {}, settingsRevision = embe
   return embeddingRefreshPromise;
 }
 
-async function initializeExtension(settingsPromise) {
-  const settingsRevision = embeddingSettingsRevision;
+async function initializeExtension(settingsPromise, { initializeMenus = false } = {}) {
+  const requestedToolbarRevision = toolbarSettingsRevision;
+  const requestedMenuRevision = openModeRevision;
+  const requestedEmbeddingRevision = embeddingSettingsRevision;
   const settings = await (settingsPromise
     || chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']));
-  cachedToolbarSettings = { ...(cachedToolbarSettings || {}), ...settings };
-  await Promise.all([
-    applyToolbarAction(settings),
-    scheduleEmbeddingConfiguration(settings.customUrls || {}, settingsRevision),
-  ]);
+  const operations = [
+    scheduleToolbarAction(settings, requestedToolbarRevision),
+    scheduleEmbeddingConfiguration(settings.customUrls || {}, requestedEmbeddingRevision),
+  ];
+  if (initializeMenus) {
+    operations.push(scheduleContextMenus(settings.openMode, requestedMenuRevision));
+  }
+  await Promise.all(operations);
 }
 
 void initializeExtension(startupSettingsPromise).catch((error) => {
@@ -132,22 +243,21 @@ void initializeExtension(startupSettingsPromise).catch((error) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
 
-  for (const key of TOOLBAR_SETTING_KEYS) {
-    if (changes[key]) {
-      cachedToolbarSettings = {
-        ...(cachedToolbarSettings || {}),
-        [key]: changes[key].newValue,
-      };
-    }
-  }
-
-  if (changes.toolbarAction || changes.quickSummarize || changes.openMode) {
+  const changedToolbarKeys = TOOLBAR_SETTING_KEYS.filter((key) => changes[key]);
+  if (changedToolbarKeys.length > 0) {
+    toolbarSettingsRevision += 1;
+    const requestedToolbarRevision = toolbarSettingsRevision;
+    cachedToolbarSettings = changedToolbarKeys.reduce((settings, key) => ({
+      ...settings,
+      [key]: changes[key].newValue,
+    }), cachedToolbarSettings || {});
     void chrome.storage.sync.get(TOOLBAR_SETTING_KEYS)
-      .then(applyToolbarAction)
+      .then((settings) => scheduleToolbarAction(settings, requestedToolbarRevision))
       .catch((error) => console.error('[PageMind] Toolbar update failed:', error));
   }
   if (changes.openMode) {
-    void createContextMenus(changes.openMode.newValue)
+    openModeRevision += 1;
+    void scheduleContextMenus(changes.openMode.newValue, openModeRevision)
       .catch((error) => console.error('[PageMind] Context menu update failed:', error));
   }
   if (changes.customUrls) {
@@ -189,7 +299,7 @@ function startDirectSummaryFromAction(tab, settings) {
 }
 
 chrome.action.onClicked.addListener((tab) => {
-  if (cachedToolbarSettings) {
+  if (toolbarSettingsCacheReady && cachedToolbarSettings) {
     startDirectSummaryFromAction(tab, cachedToolbarSettings);
     return;
   }
@@ -212,7 +322,7 @@ const SUMMARY_MENU_DESTINATIONS = new Map([
   ['summarize-page-newtab', 'newtab'],
 ]);
 
-async function createContextMenus(configuredOpenMode) {
+async function createContextMenus(configuredOpenMode, isCurrent = () => true) {
   let destination = configuredOpenMode;
   if (destination === undefined) {
     const settings = await chrome.storage.sync.get(['openMode']);
@@ -221,6 +331,7 @@ async function createContextMenus(configuredOpenMode) {
   destination = normalizeOpenMode(destination);
 
   await chrome.contextMenus.removeAll();
+  if (!isCurrent()) return;
   chrome.contextMenus.create({
     id: `summarize-page-${destination}`,
     title: 'Summarize This Page',
@@ -239,11 +350,8 @@ async function createContextMenus(configuredOpenMode) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void initializeExtension().catch((error) => {
+  void initializeExtension(undefined, { initializeMenus: true }).catch((error) => {
     console.error('[PageMind] Install initialization failed:', error);
-  });
-  void createContextMenus().catch((error) => {
-    console.error('[PageMind] Context menu setup failed:', error);
   });
 });
 
@@ -307,6 +415,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 // --- Restore main window when companion is closed ---
 chrome.windows.onRemoved.addListener(async (closedWindowId) => {
+  sidePanelInvocationGenerations.delete(closedWindowId);
   try {
     const data = await chrome.storage.session.get(['companionWindowId', 'originalWindowBounds']);
     if (data.companionWindowId !== closedWindowId) return;
@@ -401,12 +510,62 @@ async function persistPendingPayloadRoutes(state) {
   if (state.hadLegacy) await chrome.storage.session.remove(['pendingPayload']);
 }
 
-function storePendingPayload(payload) {
+async function removePendingPayloadRouteFromStorage(payload) {
+  const key = payloadRouteKey(payload?.target);
+  if (!key) return false;
+  const state = await readPendingPayloadRoutes();
+  if (state.routes[key]?.id !== payload.id) {
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return false;
+  }
+  delete state.routes[key];
+  state.dirty = true;
+  await persistPendingPayloadRoutes(state);
+  return true;
+}
+
+function removePendingPayloadRouteIfExpected(payload) {
+  return serializePendingPayloadMutation(() => removePendingPayloadRouteFromStorage(payload));
+}
+
+function capPendingPayloadRoutes(routes, protectedKey) {
+  const excess = Object.keys(routes).length - MAX_PENDING_PAYLOAD_ROUTES;
+  if (excess <= 0) return;
+  const oldestKeys = Object.entries(routes)
+    .filter(([key]) => key !== protectedKey)
+    .sort(([leftKey, left], [rightKey, right]) => (
+      left.createdAt - right.createdAt || leftKey.localeCompare(rightKey)
+    ))
+    .slice(0, excess)
+    .map(([key]) => key);
+  for (const key of oldestKeys) delete routes[key];
+}
+
+function storePendingPayload(payload, isCurrent) {
   return serializePendingPayloadMutation(async () => {
+    if (isCurrent && !isCurrent()) return false;
     const state = await readPendingPayloadRoutes();
-    state.routes[payloadRouteKey(payload.target)] = payload;
+    if (isCurrent && !isCurrent()) return false;
+    const key = payloadRouteKey(payload.target);
+    state.routes[key] = payload;
+    capPendingPayloadRoutes(state.routes, key);
     await persistPendingPayloadRoutes(state);
+    if (isCurrent && !isCurrent()) {
+      await removePendingPayloadRouteFromStorage(payload);
+      return false;
+    }
+    return true;
   });
+}
+
+function beginSidePanelInvocation(windowId) {
+  nextSidePanelInvocationGeneration += 1;
+  sidePanelInvocationGenerations.set(windowId, nextSidePanelInvocationGeneration);
+  return nextSidePanelInvocationGeneration;
+}
+
+function isCurrentSidePanelInvocation(windowId, generation) {
+  return sidePanelInvocationGenerations.get(windowId) === generation;
 }
 
 async function consumePendingPayload(message, sender) {
@@ -519,6 +678,48 @@ async function handleSummarize({
   if (!Number.isInteger(activeTab?.id)) throw new Error('No active tab found');
 
   const tabUrl = typeof activeTab.url === 'string' ? activeTab.url : '';
+  const settings = await chrome.storage.sync.get([
+    'customPrompts',
+    'customUrls',
+    'openMode',
+    'autoSubmit',
+    'includeUrl',
+    'maxContentChars',
+  ]);
+  const allPrompts = [...(Array.isArray(settings.customPrompts) ? settings.customPrompts : []), ...DEFAULT_PROMPTS];
+  const safePromptIndex = Number.isInteger(promptIndex) ? promptIndex : 0;
+  const prompt = allPrompts[safePromptIndex] ?? DEFAULT_PROMPTS[0];
+  const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
+  const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
+  const maxContentChars = Number.isInteger(settings.maxContentChars) && settings.maxContentChars > 0
+    ? settings.maxContentChars
+    : DEFAULT_MAX_CONTENT_CHARS;
+  const customUrls = settings.customUrls && typeof settings.customUrls === 'object'
+    ? settings.customUrls
+    : {};
+  const requestedDestination = resolveSummaryDestination(
+    destination ?? settings.openMode,
+    source,
+  );
+  const finalUrl = resolveProviderUrl(provider, customUrls);
+  let sidePanelInvocation;
+  if (requestedDestination === 'sidepanel') {
+    const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
+    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
+    const generation = beginSidePanelInvocation(windowId);
+    sidePanelInvocation = {
+      windowId,
+      generation,
+      isCurrent: () => isCurrentSidePanelInvocation(windowId, generation),
+    };
+  }
+  const supersededResult = {
+    success: true,
+    superseded: true,
+    destination: 'sidepanel',
+    provider,
+    url: finalUrl,
+  };
   const isYouTube = tabUrl.includes('youtube.com/watch');
   let extractedContent;
   let finalSelectedText = typeof selectedText === 'string' ? selectedText.trim() : '';
@@ -574,26 +775,6 @@ async function handleSummarize({
     extractedContent = String(extractedContent ?? '');
   }
 
-  const settings = await chrome.storage.sync.get([
-    'customPrompts',
-    'customUrls',
-    'openMode',
-    'autoSubmit',
-    'includeUrl',
-    'maxContentChars',
-  ]);
-  const allPrompts = [...(Array.isArray(settings.customPrompts) ? settings.customPrompts : []), ...DEFAULT_PROMPTS];
-  const safePromptIndex = Number.isInteger(promptIndex) ? promptIndex : 0;
-  const prompt = allPrompts[safePromptIndex] ?? DEFAULT_PROMPTS[0];
-  const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
-  const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
-  const maxContentChars = Number.isInteger(settings.maxContentChars) && settings.maxContentChars > 0
-    ? settings.maxContentChars
-    : DEFAULT_MAX_CONTENT_CHARS;
-  const customUrls = settings.customUrls && typeof settings.customUrls === 'object'
-    ? settings.customUrls
-    : {};
-
   const truncated = extractedContent.length > maxContentChars
     ? `${extractedContent.slice(0, maxContentChars)}\n\n[Content truncated — article is too long]`
     : extractedContent;
@@ -601,21 +782,16 @@ async function handleSummarize({
   if (includeUrl && tabUrl) fullMessage += `\n\nSource URL: ${tabUrl}`;
   fullMessage += `\n\n---\n\n${truncated}`;
 
+  if (sidePanelInvocation && !sidePanelInvocation.isCurrent()) return supersededResult;
   try {
     await writeToClipboard(fullMessage);
   } catch (error) {
     console.warn('[PageMind] Clipboard write failed:', error?.message || String(error));
   }
-
-  const requestedDestination = resolveSummaryDestination(
-    destination ?? settings.openMode,
-    source,
-  );
-  const finalUrl = resolveProviderUrl(provider, customUrls);
+  if (sidePanelInvocation && !sidePanelInvocation.isCurrent()) return supersededResult;
 
   if (requestedDestination === 'sidepanel') {
-    const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
-    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
+    const { windowId, isCurrent } = sidePanelInvocation;
     const payload = createPendingPayload({
       id: crypto.randomUUID(),
       text: fullMessage,
@@ -623,7 +799,11 @@ async function handleSummarize({
       autoSubmit,
       target: { kind: 'sidepanel', windowId },
     });
-    await storePendingPayload(payload);
+    const stored = await storePendingPayload(payload, isCurrent);
+    if (!stored || !isCurrent()) {
+      if (stored) await removePendingPayloadRouteIfExpected(payload);
+      return supersededResult;
+    }
     await chrome.runtime.sendMessage({
       type: 'PANEL_NAVIGATE',
       windowId,
