@@ -403,3 +403,33 @@ test('pagehide flushes pending dirty settings without waiting for the debounce',
     harness.restore();
   }
 });
+
+test('pagehide dispatches later dirty values while a normal save is in flight', async () => {
+  const harness = await bootOptions({ holdSaves: true });
+  try {
+    await harness.start();
+    const autoSubmit = harness.document.getElementById('autoSubmitToggle');
+    autoSubmit.checked = false;
+    await autoSubmit.dispatch('change');
+    await waitForSave();
+    assert.deepEqual(harness.calls, [{ autoSubmit: false }]);
+
+    autoSubmit.checked = true;
+    await autoSubmit.dispatch('change');
+    const includeUrl = harness.document.getElementById('includeUrlToggle');
+    includeUrl.checked = false;
+    await includeUrl.dispatch('change');
+    await harness.window.dispatch('pagehide');
+    assert.deepEqual(harness.calls, [
+      { autoSubmit: false },
+      { autoSubmit: true, includeUrl: false },
+    ]);
+
+    await waitForSave();
+    assert.equal(harness.calls.length, 2);
+    harness.resolveSave();
+    harness.resolveSave();
+  } finally {
+    harness.restore();
+  }
+});

@@ -20,6 +20,7 @@ let toolbarAction = 'popup';
 let saveTimer = null;
 let feedbackTimer = null;
 let saveInFlight = false;
+let isExiting = false;
 const dirtyKeys = new Set();
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -310,15 +311,35 @@ function flushDirtySettings() {
       showSaveFeedback('Could not save settings. Try again.', true);
     } else {
       showSaveFeedback('✓ Settings saved');
-      if (dirtyKeys.size > 0) scheduleSave();
+      if (!isExiting && dirtyKeys.size > 0) scheduleSave();
     }
   });
 }
 
 function flushOnPageHide() {
+  isExiting = true;
   clearTimeout(saveTimer);
   saveTimer = null;
+  if (saveInFlight) {
+    flushExitDirtySettings();
+    return;
+  }
   flushDirtySettings();
+}
+
+function flushExitDirtySettings() {
+  if (dirtyKeys.size === 0) return;
+  const keys = [...dirtyKeys];
+  dirtyKeys.clear();
+  const payload = buildSavePayload(keys);
+  chrome.storage.sync.set(payload, () => {
+    if (chrome.runtime?.lastError) {
+      keys.forEach((key) => dirtyKeys.add(key));
+      showSaveFeedback('Could not save settings. Try again.', true);
+    } else {
+      showSaveFeedback('✓ Settings saved');
+    }
+  });
 }
 
 function buildSavePayload(keys) {
