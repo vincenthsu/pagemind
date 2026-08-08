@@ -547,11 +547,12 @@ function storePendingPayload(payload, isCurrent) {
     const state = await readPendingPayloadRoutes();
     if (isCurrent && !isCurrent()) return false;
     const key = payloadRouteKey(payload.target);
+    const previousRoutes = { ...state.routes };
     state.routes[key] = payload;
     capPendingPayloadRoutes(state.routes, key);
     await persistPendingPayloadRoutes(state);
     if (isCurrent && !isCurrent()) {
-      await removePendingPayloadRouteFromStorage(payload);
+      await persistPendingPayloadRoutes({ ...state, routes: previousRoutes });
       return false;
     }
     return true;
@@ -567,6 +568,15 @@ function registerSidePanelInvocation(windowId, invocationSequence) {
 
 function isCurrentSidePanelInvocation(windowId, invocationSequence) {
   return sidePanelInvocationSequences.get(windowId) === invocationSequence;
+}
+
+function reserveSidePanelInvocation(windowId, invocationSequence) {
+  registerSidePanelInvocation(windowId, invocationSequence);
+  return {
+    windowId,
+    invocationSequence,
+    isCurrent: () => isCurrentSidePanelInvocation(windowId, invocationSequence),
+  };
 }
 
 async function consumePendingPayload(message, sender) {
@@ -667,6 +677,13 @@ async function handleSummarize({
     throw new Error(`Unknown provider: ${String(provider)}`);
   }
 
+  let sidePanelInvocation;
+  const hasKnownSidePanelDestination = source === 'sidepanel'
+    || (destination !== undefined && normalizeOpenMode(destination) === 'sidepanel');
+  if (hasKnownSidePanelDestination && Number.isInteger(sourceWindowId)) {
+    sidePanelInvocation = reserveSidePanelInvocation(sourceWindowId, invocationSequence);
+  }
+
   let activeTab;
   if (Number.isInteger(sourceTabId)) {
     activeTab = await chrome.tabs.get(sourceTabId);
@@ -713,17 +730,13 @@ async function handleSummarize({
     provider,
     url: finalUrl,
   };
-  let sidePanelInvocation;
   if (requestedDestination === 'sidepanel') {
     const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
     if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
-    const registered = registerSidePanelInvocation(windowId, invocationSequence);
-    sidePanelInvocation = {
-      windowId,
-      invocationSequence,
-      isCurrent: () => isCurrentSidePanelInvocation(windowId, invocationSequence),
-    };
-    if (!registered) return supersededResult;
+    if (!sidePanelInvocation) {
+      sidePanelInvocation = reserveSidePanelInvocation(windowId, invocationSequence);
+    }
+    if (!sidePanelInvocation.isCurrent()) return supersededResult;
   }
   const isYouTube = tabUrl.includes('youtube.com/watch');
   let extractedContent;

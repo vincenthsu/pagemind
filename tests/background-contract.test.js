@@ -1346,12 +1346,12 @@ test('a newer side-panel invocation wins when an older preflight finishes late',
 
   const older = sendRuntimeMessage(harness, {
     type: 'SUMMARIZE', provider: 'claude', promptIndex: 0,
-    sourceTabId: 109, sourceWindowId: 20, destination: 'sidepanel',
+    sourceTabId: 109, sourceWindowId: 20,
   });
   await olderPreflightStarted;
   const newerResult = await sendRuntimeMessage(harness, {
     type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'New payload',
-    sourceTabId: 110, sourceWindowId: 20, destination: 'sidepanel',
+    sourceTabId: 110, sourceWindowId: 20,
   });
   releaseOlderPreflight();
   const olderResult = await older;
@@ -1373,6 +1373,72 @@ test('a newer side-panel invocation wins when an older preflight finishes late',
   assert.equal(navigations[0].message.windowId, 20);
   assert.equal(callOf(harness, 'scripting.executeScript')
     .some((call) => call.value.target.tabId === 109), false);
+});
+
+test('a known newer side-panel invocation reserves its window before stalled preflight', async () => {
+  const harness = createChrome({
+    sync: { openMode: 'sidepanel', includeUrl: false },
+    activeTab: { id: 117, windowId: 25, url: 'https://old.example/', title: 'Old' },
+  });
+  await loadBackground(harness);
+  harness.setActiveTab({ id: 118, windowId: 25, url: 'https://new.example/', title: 'New' });
+  harness.calls.length = 0;
+
+  const originalSendMessage = harness.chrome.runtime.sendMessage.bind(harness.chrome.runtime);
+  let releaseOlderClipboard;
+  let markOlderClipboardStarted;
+  const olderClipboardStarted = new Promise((resolve) => {
+    markOlderClipboardStarted = resolve;
+  });
+  harness.chrome.runtime.sendMessage = (message, callback) => {
+    if (message.type === 'WRITE_CLIPBOARD' && message.text.includes('Old work')) {
+      markOlderClipboardStarted();
+      releaseOlderClipboard = () => originalSendMessage(message, callback);
+      return undefined;
+    }
+    return originalSendMessage(message, callback);
+  };
+
+  const originalTabsGet = harness.chrome.tabs.get.bind(harness.chrome.tabs);
+  let releaseNewerPreflight;
+  let markNewerPreflightStarted;
+  const newerPreflightStarted = new Promise((resolve) => {
+    markNewerPreflightStarted = resolve;
+  });
+  harness.chrome.tabs.get = async (tabId) => {
+    if (tabId === 118) {
+      markNewerPreflightStarted();
+      await new Promise((resolve) => {
+        releaseNewerPreflight = resolve;
+      });
+    }
+    return originalTabsGet(tabId);
+  };
+
+  const older = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Old work',
+    sourceTabId: 117, sourceWindowId: 25, destination: 'sidepanel',
+  });
+  await olderClipboardStarted;
+  const newer = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'New work',
+    sourceTabId: 118, sourceWindowId: 25, source: 'sidepanel', destination: 'newtab',
+  });
+  await newerPreflightStarted;
+
+  releaseOlderClipboard();
+  const olderResult = await older;
+  assert.equal(olderResult.superseded, true);
+  assert.equal(routedPayloads(harness).length, 0);
+  assert.equal(callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE').length, 0);
+
+  releaseNewerPreflight();
+  const newerResult = await newer;
+  assert.equal(newerResult.success, true);
+  assert.match(routedPayload(harness, 'sidepanel', 25).text, /New work/);
+  assert.equal(callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE').length, 1);
 });
 
 test('a newer side-panel invocation supersedes slow work only in its own window', async () => {
@@ -1498,6 +1564,84 @@ test('a side-panel invocation superseded during storage cannot leave or navigate
   const navigations = callOf(harness, 'runtime.sendMessage')
     .filter((call) => call.message.type === 'PANEL_NAVIGATE');
   assert.equal(navigations.length, 1);
+});
+
+test('a capped stale side-panel store restores every unrelated route', async () => {
+  const now = Date.now();
+  const pendingPayloads = Object.fromEntries(Array.from({ length: 32 }, (_, index) => {
+    const tabId = 200 + index;
+    return [`tab:${tabId}`, createPendingPayload({
+      id: `payload-${tabId}`,
+      text: `Payload ${tabId}`,
+      provider: 'claude',
+      target: { kind: 'tab', tabId },
+      createdAt: now - 1_000 + index,
+    })];
+  }));
+  const harness = createChrome({
+    sync: { openMode: 'sidepanel', includeUrl: false },
+    session: { pendingPayloads },
+    activeTab: { id: 119, windowId: 26, url: 'https://old.example/', title: 'Old' },
+  });
+  await loadBackground(harness);
+  harness.calls.length = 0;
+
+  const originalSet = harness.chrome.storage.session.set.bind(harness.chrome.storage.session);
+  let releaseStalePayloadSet;
+  let markStalePayloadSetStarted;
+  const stalePayloadSetStarted = new Promise((resolve) => {
+    markStalePayloadSetStarted = resolve;
+  });
+  harness.chrome.storage.session.set = async (values, callback) => {
+    if (!releaseStalePayloadSet && values.pendingPayloads?.['sidepanel:26']) {
+      markStalePayloadSetStarted();
+      await new Promise((resolve) => {
+        releaseStalePayloadSet = resolve;
+      });
+    }
+    return originalSet(values, callback);
+  };
+
+  let releaseNewerPreflight;
+  let markNewerPreflightStarted;
+  const newerPreflightStarted = new Promise((resolve) => {
+    markNewerPreflightStarted = resolve;
+  });
+  const originalTabsGet = harness.chrome.tabs.get.bind(harness.chrome.tabs);
+  harness.chrome.tabs.get = async (tabId) => {
+    if (tabId === 120) {
+      markNewerPreflightStarted();
+      await new Promise((resolve) => {
+        releaseNewerPreflight = resolve;
+      });
+      throw new Error('Newer preflight cancelled');
+    }
+    return originalTabsGet(tabId);
+  };
+
+  const stale = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Stale route',
+    sourceTabId: 119, sourceWindowId: 26, destination: 'sidepanel',
+  });
+  await stalePayloadSetStarted;
+  const newer = sendRuntimeMessage(harness, {
+    type: 'SUMMARIZE', provider: 'claude', promptIndex: 0, selectedText: 'Cancelled newer route',
+    sourceTabId: 120, sourceWindowId: 26, destination: 'sidepanel',
+  });
+  await newerPreflightStarted;
+
+  releaseStalePayloadSet();
+  const staleResult = await stale;
+  assert.equal(staleResult.superseded, true);
+  assert.equal(routedPayloads(harness).length, 32);
+  assert.equal(routedPayload(harness, 'tab', 200).id, 'payload-200');
+  assert.equal(routedPayload(harness, 'sidepanel', 26), undefined);
+  assert.equal(callOf(harness, 'runtime.sendMessage')
+    .filter((call) => call.message.type === 'PANEL_NAVIGATE').length, 0);
+
+  releaseNewerPreflight();
+  const newerResult = await newer;
+  assert.match(newerResult.error, /Newer preflight cancelled/);
 });
 
 test('side-panel sources override another requested destination and navigate only after targeted storage', async () => {
