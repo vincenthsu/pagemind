@@ -1,6 +1,7 @@
 // Options page script
 
 import { DEFAULT_PROMPTS } from './lib/providers.js';
+import { normalizeOpenMode, resolveToolbarAction } from './lib/settings.js';
 
 let customPrompts = [];
 let customUrls = {};
@@ -10,7 +11,7 @@ let openMode = 'companion';
 let autoSubmit = true;
 let includeUrl = true;
 let maxContentChars = 12000;
-let quickSummarize = false;
+let toolbarAction = 'popup';
 
 // Debounce timer for auto-save
 let saveTimer = null;
@@ -39,12 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Auto-save on any option change
-  document.querySelectorAll('input[name="openMode"]').forEach((radio) => {
-    radio.addEventListener('change', () => autoSave());
+  document.querySelectorAll('input[name="openMode"], input[name="toolbarAction"]').forEach((radio) => {
+    radio.addEventListener('change', autoSave);
   });
   document.getElementById('autoSubmitToggle').addEventListener('change', () => autoSave());
   document.getElementById('includeUrlToggle').addEventListener('change', () => autoSave());
-  document.getElementById('quickSummarizeToggle').addEventListener('change', () => autoSave());
   document.getElementById('maxCharsInput').addEventListener('change', () => autoSave());
 
   // URL input listeners
@@ -60,17 +60,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function loadSettings() {
   chrome.storage.sync.get(
-    ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
+    ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
     (data) => {
-      customPrompts = data.customPrompts || [];
-      customUrls = data.customUrls || {};
-      defaultProvider = data.defaultProvider || 'chatgpt';
-      defaultPromptIndex = data.defaultPromptIndex ?? 0;
-      openMode = data.openMode || 'companion';
-      autoSubmit = data.autoSubmit !== undefined ? data.autoSubmit : true;
-      includeUrl = data.includeUrl !== undefined ? data.includeUrl : true;
-      maxContentChars = data.maxContentChars || 12000;
-      quickSummarize = data.quickSummarize || false;
+      if (chrome.runtime?.lastError) {
+        console.warn('[PageMind] Could not load settings:', chrome.runtime.lastError.message);
+      }
+      const settings = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+      customPrompts = Array.isArray(settings.customPrompts) ? settings.customPrompts : [];
+      customUrls = settings.customUrls && typeof settings.customUrls === 'object' && !Array.isArray(settings.customUrls)
+        ? settings.customUrls
+        : {};
+      defaultProvider = typeof settings.defaultProvider === 'string' ? settings.defaultProvider : 'chatgpt';
+      defaultPromptIndex = Number.isInteger(settings.defaultPromptIndex) ? settings.defaultPromptIndex : 0;
+      openMode = normalizeOpenMode(settings.openMode);
+      toolbarAction = resolveToolbarAction(settings);
+      autoSubmit = typeof settings.autoSubmit === 'boolean' ? settings.autoSubmit : true;
+      includeUrl = typeof settings.includeUrl === 'boolean' ? settings.includeUrl : true;
+      maxContentChars = Number.isFinite(settings.maxContentChars) && settings.maxContentChars > 0
+        ? settings.maxContentChars
+        : 12000;
 
       updateProviderButtons();
       renderPromptList();
@@ -78,15 +86,16 @@ function loadSettings() {
 
       // Populate custom URLs
       ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
-        document.getElementById(`url-${id}`).value = customUrls[id] || '';
+        document.getElementById(`url-${id}`).value = typeof customUrls[id] === 'string' ? customUrls[id] : '';
       });
 
-      const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
-      if (radio) radio.checked = true;
+      const modeRadio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
+      if (modeRadio) modeRadio.checked = true;
+      const toolbarRadio = document.querySelector(`input[name="toolbarAction"][value="${toolbarAction}"]`);
+      if (toolbarRadio) toolbarRadio.checked = true;
 
       document.getElementById('autoSubmitToggle').checked = autoSubmit;
       document.getElementById('includeUrlToggle').checked = includeUrl;
-      document.getElementById('quickSummarizeToggle').checked = quickSummarize;
       document.getElementById('maxCharsInput').value = maxContentChars;
     }
   );
@@ -226,10 +235,12 @@ function autoSave() {
 
 function saveSettings() {
   const selectedMode = document.querySelector('input[name="openMode"]:checked')?.value || 'companion';
+  const selectedToolbarAction = document.querySelector('input[name="toolbarAction"]:checked')?.value || 'popup';
   const autoSubmitVal = document.getElementById('autoSubmitToggle')?.checked ?? true;
   const includeUrlVal = document.getElementById('includeUrlToggle')?.checked ?? true;
   const maxCharsVal = parseInt(document.getElementById('maxCharsInput')?.value, 10) || 12000;
-  const quickSummarizeVal = document.getElementById('quickSummarizeToggle')?.checked ?? false;
+  openMode = normalizeOpenMode(selectedMode);
+  toolbarAction = resolveToolbarAction({ toolbarAction: selectedToolbarAction });
 
   // Collect custom URLs
   const newCustomUrls = {};
@@ -245,12 +256,16 @@ function saveSettings() {
     defaultPromptIndex,
     lastProvider: defaultProvider,
     lastPromptIndex: defaultPromptIndex,
-    openMode: selectedMode,
+    openMode: normalizeOpenMode(selectedMode),
+    toolbarAction: resolveToolbarAction({ toolbarAction: selectedToolbarAction }),
     autoSubmit: autoSubmitVal,
     includeUrl: includeUrlVal,
     maxContentChars: maxCharsVal,
-    quickSummarize: quickSummarizeVal,
   }, () => {
+    if (chrome.runtime?.lastError) {
+      console.error('[PageMind] Could not save settings:', chrome.runtime.lastError.message);
+      return;
+    }
     const feedback = document.getElementById('saveFeedback');
     feedback.classList.add('visible');
     setTimeout(() => feedback.classList.remove('visible'), 1500);

@@ -477,6 +477,14 @@
       <div class="card-desc">Choose how the AI provider page opens after summarization.</div>
       <div class="mode-options">
         <label class="mode-option">
+          <input type="radio" name="openMode" value="sidepanel" id="modeSidePanel">
+          <div class="mode-option-body">
+            <div class="mode-option-title">📑 Chrome Side Panel</div>
+            <div class="mode-option-desc">Embeds the selected AI provider in the native Chrome Side Panel. A new-tab
+              fallback remains available.</div>
+          </div>
+        </label>
+        <label class="mode-option">
           <input type="radio" name="openMode" value="companion" id="modeCompanion" checked>
           <div class="mode-option-body">
             <div class="mode-option-title">➡️ Companion Window</div>
@@ -547,18 +555,33 @@
       </div>
     </div>
 
-    <!-- Quick Summarize Mode -->
+    <!-- Toolbar Icon Behavior -->
     <div class="card">
-      <div class="card-title">Quick Summarize</div>
-      <div class="card-desc">When enabled, clicking the extension icon will immediately summarize using the Default AI
-        Provider and Default Prompt above — no popup. You can always access settings from the right-click context menu.
-      </div>
-
-      <div class="toggle-row">
-        <span class="toggle-row-label">Click icon to summarize directly</span>
-        <label class="toggle-switch">
-          <input type="checkbox" id="quickSummarizeToggle">
-          <span class="toggle-slider"></span>
+      <div class="card-title">Toolbar Icon Behavior</div>
+      <div class="card-desc">Choose what a normal click on the PageMind toolbar icon does. Right-click actions remain
+        available in every mode.</div>
+      <div class="mode-options">
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="popup" id="toolbarPopup" checked>
+          <div class="mode-option-body">
+            <div class="mode-option-title">🧭 Open PageMind Menu</div>
+            <div class="mode-option-desc">Show the existing PageMind menu for choosing a provider and prompt.</div>
+          </div>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="summarize" id="toolbarSummarize">
+          <div class="mode-option-body">
+            <div class="mode-option-title">⚡ Summarize Directly</div>
+            <div class="mode-option-desc">Use the default provider and prompt, then open the configured AI Provider
+              Window.</div>
+          </div>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="sidepanel" id="toolbarSidePanel">
+          <div class="mode-option-body">
+            <div class="mode-option-title">📑 Toggle Side Panel</div>
+            <div class="mode-option-desc">Open or close the native Side Panel without starting a summary.</div>
+          </div>
         </label>
       </div>
     </div>
