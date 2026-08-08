@@ -8,11 +8,18 @@
 
   let provider;
   let handler;
-  let deliveredPayloadIds = new Set();
+  let deliveryState = createDeliveryState();
   let registrationId = 0;
   let extensionOrigin;
   let panelMessageListener;
   let readyRegistrationId = 0;
+
+  function createDeliveryState() {
+    return {
+      deliveredPayloadIds: new Set(),
+      inFlightPayloadIds: new Set(),
+    };
+  }
 
   function getRuntime() {
     const runtime = globalThis.chrome?.runtime;
@@ -29,12 +36,23 @@
   }
 
   async function deliverPayload(activeRegistrationId, payloadId, payload, payloadHandler) {
-    if (registrationId !== activeRegistrationId || deliveredPayloadIds.has(payloadId)) return;
-    deliveredPayloadIds.add(payloadId);
+    const activeDeliveryState = deliveryState;
+    if (
+      registrationId !== activeRegistrationId
+      || activeDeliveryState.deliveredPayloadIds.has(payloadId)
+      || activeDeliveryState.inFlightPayloadIds.has(payloadId)
+    ) return false;
+    activeDeliveryState.inFlightPayloadIds.add(payloadId);
     try {
       await payloadHandler(payload);
+      if (registrationId !== activeRegistrationId) return false;
+      activeDeliveryState.deliveredPayloadIds.add(payloadId);
+      return true;
     } catch (error) {
       console.error('PageMind payload handler failed', error);
+      return false;
+    } finally {
+      activeDeliveryState.inFlightPayloadIds.delete(payloadId);
     }
   }
 
@@ -43,6 +61,24 @@
       && payloadId.length > 0
       && payload !== null
       && typeof payload === 'object';
+  }
+
+  async function deliverTabPayload(
+    activeRegistrationId,
+    retries,
+    payload,
+    payloadHandler,
+  ) {
+    const delivered = await deliverPayload(
+      activeRegistrationId,
+      payload.id,
+      payload,
+      payloadHandler,
+    );
+    if (delivered || registrationId !== activeRegistrationId) return;
+    retryForRegistration(activeRegistrationId, retries, (remaining) => {
+      void deliverTabPayload(activeRegistrationId, remaining, payload, payloadHandler);
+    });
   }
 
   function requestTabPayload(activeRegistrationId, retries = MAX_RETRIES) {
@@ -72,9 +108,9 @@
           });
           return;
         }
-        void deliverPayload(
+        void deliverTabPayload(
           activeRegistrationId,
-          payload.id,
+          retries,
           payload,
           payloadHandler,
         );
@@ -103,7 +139,7 @@
     const registeredProvider = provider;
     const payloadHandler = handler;
     const registeredOrigin = extensionOrigin;
-    panelMessageListener = (event) => {
+    panelMessageListener = async (event) => {
       const data = event.data;
       if (
         registrationId !== activeRegistrationId
@@ -115,7 +151,19 @@
         || !isValidDelivery(data.payloadId, data.payload)
       ) return;
 
-      void deliverPayload(activeRegistrationId, data.payloadId, data.payload, payloadHandler);
+      const delivered = await deliverPayload(
+        activeRegistrationId,
+        data.payloadId,
+        data.payload,
+        payloadHandler,
+      );
+      if (!delivered || registrationId !== activeRegistrationId) return;
+      window.parent.postMessage({
+        type: 'PAGE_MIND_DELIVERED',
+        provider: registeredProvider,
+        windowId: data.windowId,
+        payloadId: data.payloadId,
+      }, registeredOrigin);
     };
     window.addEventListener('message', panelMessageListener);
   }
@@ -159,7 +207,7 @@
 
     provider = providerId;
     handler = payloadHandler;
-    deliveredPayloadIds = new Set();
+    deliveryState = createDeliveryState();
     registrationId += 1;
     const activeRegistrationId = registrationId;
 

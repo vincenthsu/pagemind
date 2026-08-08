@@ -1,15 +1,11 @@
-// Content script injected on gemini.google.com
-// Gemini uses a Quill-based rich-text editor (contenteditable .ql-editor)
+// Content script injected on gemini.google.com.
+// Gemini uses a Quill-based rich-text editor (contenteditable .ql-editor).
 
 (function () {
-  const PROVIDER_ID = 'gemini';
-  const POLL_INTERVAL = 400; // Gemini loads slower, give extra time
-  const MAX_POLLS = 60;
-  const PAYLOAD_TTL = 60000;
+  'use strict';
 
-  let polls = 0;
-  let injected = false;
-  let cachedPayload = null; // cache after first fetch — storage clears on first GET_PAYLOAD
+  const POLL_INTERVAL = 400;
+  const MAX_POLLS = 60;
 
   function getInputEl() {
     return (
@@ -24,19 +20,15 @@
     return (
       document.querySelector('button.send-button') ||
       document.querySelector('button[aria-label="Send message"]') ||
-      document.querySelector('button[aria-label="送出訊息"]') || // Traditional Chinese
+      document.querySelector('button[aria-label="送出訊息"]') ||
       document.querySelector('mat-icon[data-mat-icon-name="send"]')?.closest('button')
     );
   }
 
   function setContentEditableValue(el, text) {
     el.focus();
-
-    // For Quill editors, execCommand('insertText') works and triggers Quill's change events
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
-
-    // Also dispatch standard events
     el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
@@ -44,64 +36,43 @@
       inputType: 'insertText',
       data: text,
     }));
-
-    // Quill sometimes needs a mutation to detect changes
     el.dispatchEvent(new Event('keyup', { bubbles: true }));
   }
 
-  async function tryInject() {
-    if (injected) return;
-    if (polls >= MAX_POLLS) return;
-    polls++;
-
-    if (!cachedPayload) {
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
-        cachedPayload = response?.payload ?? null;
-      } catch (e) {
-        return;
+  async function waitForInputEl() {
+    for (let polls = 0; polls < MAX_POLLS; polls += 1) {
+      const inputEl = getInputEl();
+      if (inputEl) return inputEl;
+      if (polls + 1 < MAX_POLLS) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
       }
     }
-    const payload = cachedPayload;
+    throw new Error('Gemini prompt editor is not available');
+  }
 
-    if (!payload) {
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
+  async function injectPayload(payload) {
+    if (!payload || typeof payload.text !== 'string') {
+      throw new TypeError('Gemini payload text must be a string');
     }
 
-    if (payload.provider !== PROVIDER_ID) return;
-    if (Date.now() - payload.createdAt > PAYLOAD_TTL) return;
-
-    const inputEl = getInputEl();
-    if (!inputEl) {
-      polls--;
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
-    }
-
-    injected = true;
+    const inputEl = await waitForInputEl();
     setContentEditableValue(inputEl, payload.text);
 
-    // Only auto-submit if the setting is enabled
     if (payload.autoSubmit !== false) {
-      // Gemini needs extra time before the send button becomes active
-      await new Promise((r) => setTimeout(r, 900));
-
+      await new Promise((resolve) => setTimeout(resolve, 900));
       const submitEl = getSubmitEl();
       if (submitEl && !submitEl.disabled) {
         submitEl.click();
       } else {
-        // Try Enter key as fallback
-        inputEl.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
-        );
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          bubbles: true,
+          cancelable: true,
+        }));
       }
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryInject);
-  } else {
-    tryInject();
-  }
+  globalThis.PageMindBridge.register('gemini', injectPayload);
 })();

@@ -1,62 +1,74 @@
-// Content script injected on grok.com (ISOLATED world)
-// Fetches the payload from the extension background and relays it
-// to the MAIN world script via window.postMessage.
+// Content script injected on grok.com in the ISOLATED world.
+// Relays bridge payloads to the MAIN-world editor adapter over document events.
 
 (function () {
-  const PROVIDER_ID = 'grok';
-  const POLL_INTERVAL = 400;
-  const MAX_POLLS = 50;
-  const PAYLOAD_TTL = 60000;
-  const MSG_TYPE = '__AI_PAGE_SUMMARIZER_INJECT__';
+  'use strict';
 
-  let polls = 0;
-  let delivered = false;
-  let cachedPayload = null;
+  const REQUEST_EVENT = '__PAGE_MIND_GROK_DELIVER__';
+  const RESULT_EVENT = '__PAGE_MIND_GROK_RESULT__';
+  const RETRY_DELAY = 300;
+  const RESULT_TIMEOUT = 30000;
 
-  console.log('[AI-Summarizer][isolated] grok.js loaded');
+  function hasExactKeys(value, expectedKeys) {
+    if (!value || typeof value !== 'object') return false;
+    const keys = Object.keys(value).sort();
+    return keys.length === expectedKeys.length
+      && keys.every((key, index) => key === expectedKeys[index]);
+  }
 
-  async function tryDeliver() {
-    if (delivered) return;
-    if (polls >= MAX_POLLS) return;
-    polls++;
+  function injectPayload(payload) {
+    if (!payload || typeof payload.text !== 'string') {
+      return Promise.reject(new TypeError('Grok payload text must be a string'));
+    }
 
-    if (!cachedPayload) {
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
-        cachedPayload = response?.payload ?? null;
-        console.log('[AI-Summarizer][isolated] GET_PAYLOAD:', cachedPayload ? 'HAS PAYLOAD' : 'null');
-      } catch (e) {
-        console.error('[AI-Summarizer][isolated] sendMessage error:', e);
-        return;
+    const requestId = crypto.randomUUID();
+    const detail = {
+      requestId,
+      text: payload.text,
+      autoSubmit: payload.autoSubmit !== false,
+    };
+
+    return new Promise((resolve, reject) => {
+      let retryTimer;
+      let timeoutTimer;
+      let settled = false;
+
+      function cleanup() {
+        document.removeEventListener(RESULT_EVENT, handleResult);
+        clearTimeout(retryTimer);
+        clearTimeout(timeoutTimer);
       }
-    }
-    const payload = cachedPayload;
 
-    if (!payload) {
-      setTimeout(tryDeliver, POLL_INTERVAL);
-      return;
-    }
+      function handleResult(event) {
+        if (
+          event.target !== document
+          || !hasExactKeys(event.detail, ['ok', 'requestId'])
+          || event.detail.requestId !== requestId
+          || typeof event.detail.ok !== 'boolean'
+        ) return;
 
-    if (payload.provider !== PROVIDER_ID) {
-      console.log('[AI-Summarizer][isolated] wrong provider:', payload.provider);
-      return;
-    }
-    if (Date.now() - payload.createdAt > PAYLOAD_TTL) return;
+        settled = true;
+        cleanup();
+        if (event.detail.ok) resolve();
+        else reject(new Error('Grok MAIN-world injection failed'));
+      }
 
-    delivered = true;
-    console.log('[AI-Summarizer][isolated] relaying payload to MAIN world');
+      function dispatchRequest() {
+        if (settled) return;
+        document.dispatchEvent(new CustomEvent(REQUEST_EVENT, { detail }));
+        if (!settled) retryTimer = setTimeout(dispatchRequest, RETRY_DELAY);
+      }
 
-    // Retry several times in case MAIN world listener isn't registered yet
-    for (let i = 0; i < 8; i++) {
-      setTimeout(() => {
-        window.postMessage({ type: MSG_TYPE, text: payload.text, autoSubmit: payload.autoSubmit }, '*');
-      }, i * 300);
-    }
+      document.addEventListener(RESULT_EVENT, handleResult);
+      timeoutTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('Grok MAIN-world injection timed out'));
+      }, RESULT_TIMEOUT);
+      dispatchRequest();
+    });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryDeliver);
-  } else {
-    tryDeliver();
-  }
+  globalThis.PageMindBridge.register('grok', injectPayload);
 })();

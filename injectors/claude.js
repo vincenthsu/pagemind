@@ -1,15 +1,11 @@
-// Content script injected on claude.ai
-// Claude uses ProseMirror (contenteditable div)
+// Content script injected on claude.ai.
+// Claude uses a ProseMirror contenteditable div.
 
 (function () {
-  const PROVIDER_ID = 'claude';
+  'use strict';
+
   const POLL_INTERVAL = 300;
   const MAX_POLLS = 50;
-  const PAYLOAD_TTL = 60000;
-
-  let polls = 0;
-  let injected = false;
-  let cachedPayload = null; // cache after first fetch — storage clears on first GET_PAYLOAD
 
   function getInputEl() {
     return (
@@ -29,75 +25,56 @@
 
   function setContentEditableValue(el, text) {
     el.focus();
-
-    // Select all existing content and replace it
     const selection = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(el);
     selection.removeAllRanges();
     selection.addRange(range);
-
-    // insertText via execCommand works with ProseMirror and fires the correct events
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
-
-    // Fire additional events for React/framework compatibility
     el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: text,
+    }));
   }
 
-  async function tryInject() {
-    if (injected) return;
-    if (polls >= MAX_POLLS) return;
-    polls++;
-
-    if (!cachedPayload) {
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
-        cachedPayload = response?.payload ?? null;
-      } catch (e) {
-        return;
+  async function waitForInputEl() {
+    for (let polls = 0; polls < MAX_POLLS; polls += 1) {
+      const inputEl = getInputEl();
+      if (inputEl) return inputEl;
+      if (polls + 1 < MAX_POLLS) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
       }
     }
-    const payload = cachedPayload;
+    throw new Error('Claude prompt editor is not available');
+  }
 
-    if (!payload) {
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
+  async function injectPayload(payload) {
+    if (!payload || typeof payload.text !== 'string') {
+      throw new TypeError('Claude payload text must be a string');
     }
 
-    if (payload.provider !== PROVIDER_ID) return;
-    if (Date.now() - payload.createdAt > PAYLOAD_TTL) return;
-
-    const inputEl = getInputEl();
-    if (!inputEl) {
-      polls--;
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
-    }
-
-    injected = true;
+    const inputEl = await waitForInputEl();
     setContentEditableValue(inputEl, payload.text);
 
-    // Only auto-submit if the setting is enabled
     if (payload.autoSubmit !== false) {
-      await new Promise((r) => setTimeout(r, 700));
-
+      await new Promise((resolve) => setTimeout(resolve, 700));
       const submitEl = getSubmitEl();
       if (submitEl && !submitEl.disabled) {
         submitEl.click();
       } else {
-        // Claude also responds to Enter key in ProseMirror
-        inputEl.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
-        );
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          bubbles: true,
+          cancelable: true,
+        }));
       }
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryInject);
-  } else {
-    tryInject();
-  }
+  globalThis.PageMindBridge.register('claude', injectPayload);
 })();
