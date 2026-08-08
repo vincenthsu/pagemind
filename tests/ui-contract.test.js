@@ -20,6 +20,7 @@ test('side panel exposes an accessible provider host shell without hiding provid
   assert.match(sidePanelHtml, /id="statusMsg"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(sidePanelHtml, /id="frameFallback"[^>]*role="alert"/);
   assert.match(sidePanelHtml, /<iframe[^>]*id="providerFrame"[^>]*title="AI provider"/);
+  assert.match(sidePanelHtml, /id="providerGrid"[^>]*role="group"[^>]*aria-label="AI provider"/);
   assert.doesNotMatch(sidePanelHtml, /id="panelControls"[^>]*hidden/);
 });
 

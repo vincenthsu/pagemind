@@ -3,7 +3,11 @@ import test from 'node:test';
 
 const previousDocument = globalThis.document;
 globalThis.document = { addEventListener() {} };
-const { createSidePanelController, FRAME_READY_TIMEOUT_MS } = await import('../sidepanel.js?contract-test');
+const {
+  createSidePanelController,
+  DELIVERY_ACK_TIMEOUT_MS,
+  FRAME_READY_TIMEOUT_MS,
+} = await import('../sidepanel.js?contract-test');
 globalThis.document = previousDocument;
 
 const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
@@ -200,6 +204,7 @@ function createHarness({
     setPayload(payload) { payloadResponse = { payload }; },
     setPayloadResponse(response) { payloadResponse = response; },
     setPanelReadyResponse(response) { panelReadyResponse = response; },
+    setSummarizeResponse(response) { summarizeResponse = response; },
     setCurrentTab(tab) { currentTab = tab; },
     async ready(provider, origin) {
       const frame = document.getElementById('providerFrame');
@@ -210,12 +215,25 @@ function createHarness({
       });
       await flush();
     },
+    async ack(provider, origin, payloadId, overrides = {}) {
+      const frame = document.getElementById('providerFrame');
+      await window.dispatch('message', {
+        source: frame.contentWindow,
+        origin,
+        data: {
+          type: 'PAGE_MIND_DELIVERED', provider, windowId: 7, payloadId,
+          ...overrides,
+        },
+      });
+      await flush();
+    },
   };
 }
 
 test('exports the testable 12 second readiness timeout', () => {
   assert.equal(typeof createSidePanelController, 'function');
   assert.equal(FRAME_READY_TIMEOUT_MS, 12_000);
+  assert.equal(DELIVERY_ACK_TIMEOUT_MS, 12_000);
 });
 
 test('initialization asks for pending provider and navigates exactly once', async () => {
@@ -245,6 +263,143 @@ test('trusted frame readiness consumes and delivers the exact payload to its ori
     },
   }]);
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
+});
+
+test('only an exact delivery ACK clears the locally retained payload', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'ack-me', provider: 'claude', text: 'Summary' });
+  await harness.controller.initialize();
+  await harness.ready('claude', 'https://claude.ai');
+  const firstFrame = harness.frame;
+
+  await harness.ack('claude', 'https://evil.test', 'ack-me');
+  await harness.ack('claude', 'https://claude.ai', 'wrong-id');
+  await harness.ack('grok', 'https://claude.ai', 'ack-me');
+  await harness.ack('claude', 'https://claude.ai', 'ack-me', { windowId: 8 });
+  await harness.window.dispatch('message', {
+    source: {},
+    origin: 'https://claude.ai',
+    data: { type: 'PAGE_MIND_DELIVERED', provider: 'claude', windowId: 7, payloadId: 'ack-me' },
+  });
+  await harness.document.getElementById('reloadBtn').dispatch('click');
+  harness.setPayloadResponse({ payload: null });
+  await harness.ready('claude', 'https://claude.ai');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'ack-me');
+
+  await harness.ack('claude', 'https://claude.ai', 'ack-me');
+  await harness.document.getElementById('reloadBtn').dispatch('click');
+  await harness.ready('claude', 'https://claude.ai');
+  assert.deepEqual(harness.frame.posts, []);
+  assert.notEqual(firstFrame, harness.frame);
+});
+
+test('delivery ACK timeout shows fallback and Retry redelivers the retained payload', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'grok' } });
+  harness.setPayload({ id: 'needs-ack', provider: 'grok', text: 'Summary' });
+  await harness.controller.initialize();
+  await harness.ready('grok', 'https://grok.com');
+  const ackTimer = harness.timers.at(-1);
+  assert.equal(ackTimer.delay, 12_000);
+  ackTimer.callback();
+  assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), true);
+
+  harness.setPayloadResponse({ payload: null });
+  await harness.document.getElementById('retryFrameBtn').dispatch('click');
+  await flush();
+  await harness.ready('grok', 'https://grok.com');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'needs-ack');
+});
+
+test('ACK-timeout Retry reposts retained payload when fresh lookup transiently fails', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'grok' } });
+  harness.setPayload({ id: 'retry-retained', provider: 'grok', text: 'Summary' });
+  await harness.controller.initialize();
+  await harness.ready('grok', 'https://grok.com');
+  harness.timers.at(-1).callback();
+
+  harness.setPayloadResponse({ error: 'temporary lookup failure' });
+  await harness.document.getElementById('retryFrameBtn').dispatch('click');
+  await flush();
+  await harness.ready('grok', 'https://grok.com');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'retry-retained');
+  assert.match(harness.document.getElementById('statusMsg').textContent, /temporary lookup failure/);
+  assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
+  assert.equal(harness.timers.at(-1).delay, 12_000);
+});
+
+test('readiness fetches fresh payload before choosing between fresh and retained', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'retained-a', provider: 'claude', text: 'A', createdAt: 100 });
+  await harness.controller.initialize();
+  await harness.ready('claude', 'https://claude.ai');
+  harness.frame.posts.length = 0;
+
+  harness.setPayload({ id: 'fresh-b', provider: 'claude', text: 'B', createdAt: 200 });
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await flush();
+  assert.deepEqual(harness.frame.posts.map(({ message }) => message.payloadId), ['fresh-b']);
+});
+
+test('older GET response cannot replace a newer candidate retained during navigation', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  await harness.controller.initialize();
+  const callbacks = [];
+  const originalSend = harness.chrome.runtime.sendMessage;
+  harness.chrome.runtime.sendMessage = (message, callback) => {
+    if (message.type === 'GET_PAYLOAD') {
+      callbacks.push(callback);
+      return undefined;
+    }
+    return originalSend(message, callback);
+  };
+  await harness.ready('claude', 'https://claude.ai');
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await flush();
+  await harness.document.getElementById('reloadBtn').dispatch('click');
+  callbacks[1]({ payload: { id: 'newer-candidate', provider: 'claude', text: 'B' } });
+  await flush();
+  callbacks[0]({ payload: { id: 'older-candidate', provider: 'claude', text: 'A' } });
+  await flush();
+  harness.chrome.runtime.sendMessage = originalSend;
+  harness.setPayloadResponse({ payload: null });
+  await harness.ready('claude', 'https://claude.ai');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'newer-candidate');
+});
+
+test('later finite createdAt wins when retained payload is newer than fresh route', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'retained-newer', provider: 'claude', text: 'A', createdAt: 300 });
+  await harness.controller.initialize();
+  await harness.ready('claude', 'https://claude.ai');
+  harness.frame.posts.length = 0;
+  harness.setPayload({ id: 'fresh-older', provider: 'claude', text: 'B', createdAt: 200 });
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await flush();
+  assert.deepEqual(harness.frame.posts.map(({ message }) => message.payloadId), ['retained-newer']);
+});
+
+test('stale ACK for replaced payload cannot clear the newer retained payload', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'payload-a', provider: 'claude', text: 'A', createdAt: 100 });
+  await harness.controller.initialize();
+  await harness.ready('claude', 'https://claude.ai');
+  harness.setPayload({ id: 'payload-b', provider: 'claude', text: 'B', createdAt: 200 });
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await flush();
+  await harness.ack('claude', 'https://claude.ai', 'payload-a');
+
+  await harness.document.getElementById('reloadBtn').dispatch('click');
+  harness.setPayloadResponse({ payload: null });
+  await harness.ready('claude', 'https://claude.ai');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'payload-b');
 });
 
 test('readiness never posts a delivery when background has no actual payload', async () => {
@@ -432,6 +587,25 @@ test('a delayed older runtime navigation cannot override a newer navigation', as
   customUrlReads[0]({ customUrls: {} });
   await flush();
   assert.equal(harness.frame.src, 'https://grok.com/');
+});
+
+test('local provider navigation supersedes runtime handler waiting on URL refresh', async () => {
+  const harness = createHarness();
+  await harness.controller.initialize();
+  let releaseRefresh;
+  harness.chrome.storage.sync.get = (keys, callback) => {
+    if (keys.length === 1 && keys[0] === 'customUrls') releaseRefresh = callback;
+    else callback({});
+  };
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
+  }, harness.trustedSender);
+  await harness.document.getElementById('providerGrid').dispatch('click', {
+    target: harness.document.providerButtons[1],
+  });
+  releaseRefresh({ customUrls: {} });
+  await flush();
+  assert.equal(harness.frame.src, 'https://gemini.google.com/app');
 });
 
 test('a superseded custom URL refresh failure cannot overwrite current status', async () => {
@@ -828,4 +1002,37 @@ test('side-panel summary captures exact active tab and always targets its panel'
   });
   assert.deepEqual(harness.scriptCalls.at(-1).target, { tabId: 31, allFrames: true });
   assert.equal(harness.document.getElementById('summarizeBtn').disabled, false);
+});
+
+test('malformed summary response exits loading with an error and re-enables', async () => {
+  const harness = createHarness();
+  harness.setSummarizeResponse(undefined);
+  await harness.controller.initialize();
+  await harness.document.getElementById('summarizeBtn').dispatch('click');
+  assert.equal(harness.document.getElementById('summarizeBtn').disabled, false);
+  assert.match(harness.document.getElementById('statusMsg').textContent, /unexpected response/i);
+  assert.equal(harness.document.getElementById('statusMsg').classList.contains('error'), true);
+});
+
+test('summary status captures request provider and clipboard hint requires explicit confirmation', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'gemini' } });
+  let releaseSummary;
+  const originalSend = harness.chrome.runtime.sendMessage;
+  harness.chrome.runtime.sendMessage = (message, callback) => {
+    if (message.type === 'SUMMARIZE') {
+      releaseSummary = callback;
+      return undefined;
+    }
+    return originalSend(message, callback);
+  };
+  await harness.controller.initialize();
+  const summary = harness.document.getElementById('summarizeBtn').dispatch('click');
+  await flush();
+  await harness.document.getElementById('providerGrid').dispatch('click', {
+    target: harness.document.providerButtons[2],
+  });
+  releaseSummary({ success: true, destination: 'sidepanel', clipboardCopied: false });
+  await summary;
+  assert.match(harness.document.getElementById('statusMsg').textContent, /Gemini/);
+  assert.equal(harness.document.getElementById('clipboardHint').classList.contains('visible'), false);
 });

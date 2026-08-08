@@ -2,6 +2,7 @@ import { DEFAULT_PROMPTS, PROVIDERS } from './lib/providers.js';
 import { isValidCustomProviderUrl, resolveProviderUrl } from './lib/provider-embedding.js';
 
 export const FRAME_READY_TIMEOUT_MS = 12_000;
+export const DELIVERY_ACK_TIMEOUT_MS = 12_000;
 
 function hasProvider(provider) {
   return typeof provider === 'string' && Object.hasOwn(PROVIDERS, provider);
@@ -51,11 +52,12 @@ export function createSidePanelController({
     currentUrl: '',
     currentOrigin: '',
     readinessTimer: null,
+    deliveryAckTimer: null,
     retainedPayload: null,
     runtimeNavigationGeneration: 0,
     customUrlsRevision: 0,
     consumeRequestGeneration: 0,
-    latestSuccessfulConsumeGeneration: 0,
+    latestSelectedConsumeGeneration: 0,
     payloadErrorVisible: false,
     pageInfoGeneration: 0,
   };
@@ -224,6 +226,11 @@ export function createSidePanelController({
     state.readinessTimer = null;
   }
 
+  function clearDeliveryAckTimer() {
+    if (state.deliveryAckTimer) clock.clearTimeout(state.deliveryAckTimer);
+    state.deliveryAckTimer = null;
+  }
+
   function replaceProviderFrame() {
     const replacement = elements.frame.cloneNode(false);
     replacement.removeAttribute('src');
@@ -252,8 +259,8 @@ export function createSidePanelController({
     state.currentUrl = url;
     state.currentOrigin = origin;
     state.providerReady = false;
-    if (state.retainedPayload?.provider !== provider) state.retainedPayload = null;
     clearReadinessTimer();
+    clearDeliveryAckTimer();
     hideFallback();
     renderProviderButtons();
 
@@ -273,14 +280,22 @@ export function createSidePanelController({
     }, readinessTimeoutMs);
   }
 
-  function postPayload(generation, provider, origin, payload, consumeGeneration) {
+  function postPayload(
+    generation,
+    provider,
+    origin,
+    payload,
+    consumeGeneration,
+    { preservePayloadError = false } = {},
+  ) {
     if (
       state.navigationGeneration !== generation
       || state.selectedProvider !== provider
       || state.currentOrigin !== origin
       || !state.providerReady
-      || consumeGeneration < state.latestSuccessfulConsumeGeneration
+      || consumeGeneration < state.latestSelectedConsumeGeneration
     ) return false;
+    const frame = elements.frame;
     elements.frame.contentWindow.postMessage({
       type: 'PAGE_MIND_DELIVER',
       provider,
@@ -288,11 +303,22 @@ export function createSidePanelController({
       payloadId: payload.id,
       payload,
     }, origin);
-    state.latestSuccessfulConsumeGeneration = Math.max(
-      state.latestSuccessfulConsumeGeneration,
+    state.latestSelectedConsumeGeneration = Math.max(
+      state.latestSelectedConsumeGeneration,
       consumeGeneration,
     );
-    clearPayloadError();
+    clearDeliveryAckTimer();
+    state.deliveryAckTimer = clock.setTimeout(() => {
+      if (
+        elements.frame === frame
+        && state.selectedProvider === provider
+        && state.currentOrigin === origin
+        && state.retainedPayload?.payload.id === payload.id
+      ) {
+        showFallback('The provider did not confirm delivery. Try again to resend.');
+      }
+    }, DELIVERY_ACK_TIMEOUT_MS);
+    if (!preservePayloadError) clearPayloadError();
     hideFallback();
     return true;
   }
@@ -303,25 +329,54 @@ export function createSidePanelController({
       && state.currentOrigin === origin;
   }
 
-  async function consumeAndDeliver(generation, provider, origin) {
-    state.consumeRequestGeneration += 1;
-    const consumeGeneration = state.consumeRequestGeneration;
+  function validPayload(payload) {
+    return payload
+      && typeof payload === 'object'
+      && typeof payload.id === 'string'
+      && payload.id.length > 0;
+  }
+
+  function pickDeliveryCandidate(retained, fresh) {
+    if (!retained) return fresh;
+    if (!fresh) return retained;
+    if (retained.consumeGeneration > fresh.consumeGeneration) return retained;
+    const retainedCreatedAt = retained.payload.createdAt;
+    const freshCreatedAt = fresh.payload.createdAt;
+    if (Number.isFinite(retainedCreatedAt) || Number.isFinite(freshCreatedAt)) {
+      if (!Number.isFinite(retainedCreatedAt)) return fresh;
+      if (!Number.isFinite(freshCreatedAt)) return retained;
+      if (retainedCreatedAt !== freshCreatedAt) {
+        return retainedCreatedAt > freshCreatedAt ? retained : fresh;
+      }
+    }
+    return fresh;
+  }
+
+  function handlePayloadLookupFailure(generation, provider, origin, consumeGeneration, message) {
+    if (
+      consumeGeneration !== state.consumeRequestGeneration
+      || !isCurrentNavigation(generation, provider, origin)
+    ) return;
+    setPayloadError(message);
     const retained = state.retainedPayload;
-    if (retained?.provider === provider) {
-      if (retained.consumeGeneration < state.latestSuccessfulConsumeGeneration) {
-        state.retainedPayload = null;
-      } else if (postPayload(
+    if (
+      retained?.provider === provider
+      && retained.consumeGeneration >= state.latestSelectedConsumeGeneration
+      && postPayload(
         generation,
         provider,
         origin,
         retained.payload,
         retained.consumeGeneration,
-      )) {
-        state.retainedPayload = null;
-        clearPayloadError();
-        hideFallback();
-      }
-    }
+        { preservePayloadError: true },
+      )
+    ) return;
+    showFallback('PageMind could not retrieve the pending summary.');
+  }
+
+  async function consumeAndDeliver(generation, provider, origin) {
+    state.consumeRequestGeneration += 1;
+    const consumeGeneration = state.consumeRequestGeneration;
     let response;
     try {
       response = await sendRuntimeMessage({
@@ -331,23 +386,23 @@ export function createSidePanelController({
         windowId: state.panelWindowId,
       });
     } catch (error) {
-      if (
-        consumeGeneration === state.consumeRequestGeneration
-        && isCurrentNavigation(generation, provider, origin)
-      ) {
-        setPayloadError(`Could not retrieve summary: ${errorMessage(error)}`);
-        showFallback('PageMind could not retrieve the pending summary.');
-      }
+      handlePayloadLookupFailure(
+        generation,
+        provider,
+        origin,
+        consumeGeneration,
+        `Could not retrieve summary: ${errorMessage(error)}`,
+      );
       return;
     }
     if (response?.error) {
-      if (
-        consumeGeneration === state.consumeRequestGeneration
-        && isCurrentNavigation(generation, provider, origin)
-      ) {
-        setPayloadError(`Could not retrieve summary: ${response.error}`);
-        showFallback('PageMind could not retrieve the pending summary.');
-      }
+      handlePayloadLookupFailure(
+        generation,
+        provider,
+        origin,
+        consumeGeneration,
+        `Could not retrieve summary: ${response.error}`,
+      );
       return;
     }
     if (
@@ -358,8 +413,15 @@ export function createSidePanelController({
       hideFallback();
     }
     const payload = response?.payload;
-    if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string' || payload.id.length === 0) return;
-    if (consumeGeneration < state.latestSuccessfulConsumeGeneration) return;
+    if (consumeGeneration < state.latestSelectedConsumeGeneration) return;
+    const fresh = validPayload(payload)
+      ? { provider, payload, consumeGeneration }
+      : null;
+    const retained = state.retainedPayload?.provider === provider
+      ? state.retainedPayload
+      : null;
+    const candidate = pickDeliveryCandidate(retained, fresh);
+    if (!candidate) return;
     if (
       state.navigationGeneration !== generation
       || state.selectedProvider !== provider
@@ -367,20 +429,35 @@ export function createSidePanelController({
       || !state.providerReady
     ) {
       if (state.selectedProvider === provider) {
-        if (!state.retainedPayload || consumeGeneration >= state.retainedPayload.consumeGeneration) {
-          state.retainedPayload = { provider, payload, consumeGeneration };
+        if (
+          !state.retainedPayload
+          || candidate.consumeGeneration >= state.retainedPayload.consumeGeneration
+          || pickDeliveryCandidate(state.retainedPayload, candidate) === candidate
+        ) {
+          state.retainedPayload = candidate;
         }
         if (state.providerReady) {
           const currentGeneration = state.navigationGeneration;
           const currentOrigin = state.currentOrigin;
-          if (postPayload(currentGeneration, provider, currentOrigin, payload, consumeGeneration)) {
-            state.retainedPayload = null;
-          }
+          postPayload(
+            currentGeneration,
+            provider,
+            currentOrigin,
+            state.retainedPayload.payload,
+            state.retainedPayload.consumeGeneration,
+          );
         }
       }
       return;
     }
-    postPayload(generation, provider, origin, payload, consumeGeneration);
+    state.retainedPayload = candidate;
+    postPayload(
+      generation,
+      provider,
+      origin,
+      candidate.payload,
+      candidate.consumeGeneration,
+    );
   }
 
   async function handleFrameMessage(event) {
@@ -388,9 +465,23 @@ export function createSidePanelController({
     if (
       event.source !== elements.frame.contentWindow
       || event.origin !== state.currentOrigin
-      || data?.type !== 'PANEL_READY'
-      || data.provider !== state.selectedProvider
     ) return;
+    if (data?.type === 'PAGE_MIND_DELIVERED') {
+      if (
+        data.provider !== state.selectedProvider
+        || data.windowId !== state.panelWindowId
+        || !Number.isInteger(data.windowId)
+        || typeof data.payloadId !== 'string'
+        || data.payloadId !== state.retainedPayload?.payload.id
+        || state.retainedPayload.provider !== data.provider
+      ) return;
+      clearDeliveryAckTimer();
+      state.retainedPayload = null;
+      clearPayloadError();
+      hideFallback();
+      return;
+    }
+    if (data?.type !== 'PANEL_READY' || data.provider !== state.selectedProvider) return;
     const generation = state.navigationGeneration;
     const provider = state.selectedProvider;
     const origin = state.currentOrigin;
@@ -418,16 +509,23 @@ export function createSidePanelController({
     ) return;
     state.runtimeNavigationGeneration += 1;
     const runtimeNavigationGeneration = state.runtimeNavigationGeneration;
+    const localNavigationGeneration = state.navigationGeneration;
     try {
       await refreshCustomUrls();
     } catch (error) {
-      if (runtimeNavigationGeneration === state.runtimeNavigationGeneration) {
+      if (
+        runtimeNavigationGeneration === state.runtimeNavigationGeneration
+        && localNavigationGeneration === state.navigationGeneration
+      ) {
         setStatus('error', `Could not refresh provider URLs: ${errorMessage(error)}`);
         showFallback('PageMind could not refresh provider settings.');
       }
       return;
     }
-    if (runtimeNavigationGeneration !== state.runtimeNavigationGeneration) return;
+    if (
+      runtimeNavigationGeneration !== state.runtimeNavigationGeneration
+      || localNavigationGeneration !== state.navigationGeneration
+    ) return;
     const resolvedUrl = acceptedNavigationUrl(message.provider, message.url);
     if (
       message.provider === state.selectedProvider
@@ -491,6 +589,8 @@ export function createSidePanelController({
   }
 
   async function handleSummarize() {
+    const requestProvider = state.selectedProvider;
+    elements.clipboardHint.classList.remove('visible');
     setButtonDisabled(true);
     try {
       const tab = await refreshActiveTab();
@@ -500,7 +600,7 @@ export function createSidePanelController({
       setStatus('loading', selectedText ? 'Sending selected text…' : 'Extracting page content…');
       const response = await sendRuntimeMessage({
         type: 'SUMMARIZE',
-        provider: state.selectedProvider,
+        provider: requestProvider,
         promptIndex: Number.isInteger(promptIndex) ? promptIndex : 0,
         selectedText,
         source: 'sidepanel',
@@ -508,13 +608,16 @@ export function createSidePanelController({
         sourceTabId: tab.id,
         sourceWindowId: state.panelWindowId,
       });
+      if (!response || typeof response !== 'object') {
+        throw new Error('Unexpected response from the extension.');
+      }
       if (response?.error) throw new Error(response.error);
       if (response?.superseded) {
         setStatus('success', 'A newer summary request took priority.');
       } else if (response?.success) {
-        setStatus('success', `Sent to ${PROVIDERS[state.selectedProvider].label}.`);
-        elements.clipboardHint.classList.add('visible');
-      }
+        setStatus('success', `Sent to ${PROVIDERS[requestProvider].label}.`);
+        if (response.clipboardCopied === true) elements.clipboardHint.classList.add('visible');
+      } else throw new Error('Unexpected response from the extension.');
     } catch (error) {
       setStatus('error', errorMessage(error));
     } finally {
