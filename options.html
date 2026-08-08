@@ -232,6 +232,11 @@
       transform: translateY(0);
     }
 
+    .save-feedback.error {
+      color: #842029;
+      background: #f8d7da;
+    }
+
     /* Prompt select dropdown (reused from popup) */
     .prompt-select {
       width: 100%;
@@ -473,23 +478,31 @@
 
     <!-- AI Provider Window Mode -->
     <div class="card">
-      <div class="card-title">AI Provider Window</div>
+      <div class="card-title" id="providerWindowLabel">AI Provider Window</div>
       <div class="card-desc">Choose how the AI provider page opens after summarization.</div>
-      <div class="mode-options">
+      <div class="mode-options" role="radiogroup" aria-labelledby="providerWindowLabel">
+        <label class="mode-option">
+          <input type="radio" name="openMode" value="sidepanel" id="modeSidePanel">
+          <span class="mode-option-body">
+            <span class="mode-option-title">📑 Chrome Side Panel</span>
+            <span class="mode-option-desc">Embeds the selected AI provider in the native Chrome Side Panel. A new-tab
+              fallback remains available.</span>
+          </span>
+        </label>
         <label class="mode-option">
           <input type="radio" name="openMode" value="companion" id="modeCompanion" checked>
-          <div class="mode-option-body">
-            <div class="mode-option-title">➡️ Companion Window</div>
-            <div class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original
-              window auto-resizes and restores on close.</div>
-          </div>
+          <span class="mode-option-body">
+            <span class="mode-option-title">➡️ Companion Window</span>
+            <span class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original
+              window auto-resizes and restores on close.</span>
+          </span>
         </label>
         <label class="mode-option">
           <input type="radio" name="openMode" value="newtab" id="modeNewTab">
-          <div class="mode-option-body">
-            <div class="mode-option-title">🆕 New Tab</div>
-            <div class="mode-option-desc">Opens the AI provider in a new browser tab in the current window.</div>
-          </div>
+          <span class="mode-option-body">
+            <span class="mode-option-title">🆕 New Tab</span>
+            <span class="mode-option-desc">Opens the AI provider in a new browser tab in the current window.</span>
+          </span>
         </label>
       </div>
     </div>
@@ -547,18 +560,33 @@
       </div>
     </div>
 
-    <!-- Quick Summarize Mode -->
+    <!-- Toolbar Icon Behavior -->
     <div class="card">
-      <div class="card-title">Quick Summarize</div>
-      <div class="card-desc">When enabled, clicking the extension icon will immediately summarize using the Default AI
-        Provider and Default Prompt above — no popup. You can always access settings from the right-click context menu.
-      </div>
-
-      <div class="toggle-row">
-        <span class="toggle-row-label">Click icon to summarize directly</span>
-        <label class="toggle-switch">
-          <input type="checkbox" id="quickSummarizeToggle">
-          <span class="toggle-slider"></span>
+      <div class="card-title" id="toolbarBehaviorLabel">Toolbar Icon Behavior</div>
+      <div class="card-desc">Choose what a normal click on the PageMind toolbar icon does. Right-click actions remain
+        available in every mode.</div>
+      <div class="mode-options" role="radiogroup" aria-labelledby="toolbarBehaviorLabel">
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="popup" id="toolbarPopup" checked>
+          <span class="mode-option-body">
+            <span class="mode-option-title">🧭 Open PageMind Menu</span>
+            <span class="mode-option-desc">Show the existing PageMind menu for choosing a provider and prompt.</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="summarize" id="toolbarSummarize">
+          <span class="mode-option-body">
+            <span class="mode-option-title">⚡ Summarize Directly</span>
+            <span class="mode-option-desc">Use the default provider and prompt, then open the configured AI Provider
+              Window.</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="toolbarAction" value="sidepanel" id="toolbarSidePanel">
+          <span class="mode-option-body">
+            <span class="mode-option-title">📑 Toggle Side Panel</span>
+            <span class="mode-option-desc">Open or close the native Side Panel without starting a summary.</span>
+          </span>
         </label>
       </div>
     </div>
@@ -587,7 +615,7 @@
     </div>
 
     <!-- Auto-save feedback (floating) -->
-    <span class="save-feedback" id="saveFeedback">✓ Settings saved</span>
+    <span class="save-feedback" id="saveFeedback" role="status" aria-live="polite">✓ Settings saved</span>
 
   </div>
 

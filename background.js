@@ -2,86 +2,425 @@
 // This file uses ES module syntax (manifest.json: "type": "module")
 
 import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
+import {
+  normalizeOpenMode,
+  resolveToolbarAction,
+  getToolbarChromeConfig,
+  resolveSummaryDestination,
+} from './lib/settings.js';
+import {
+  CUSTOM_SCRIPT_IDS,
+  resolveProviderUrl,
+  buildEmbeddingRules,
+  buildCustomContentScriptRegistrations,
+} from './lib/provider-embedding.js';
+import { createPendingPayload, matchPayloadRequest } from './lib/payload-routing.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
+const MAX_PENDING_PAYLOAD_ROUTES = 32;
+const MANAGED_RULE_ID_MIN = 1000;
+const MANAGED_RULE_ID_MAX = 2000;
+const TOOLBAR_SETTING_KEYS = [
+  'toolbarAction',
+  'quickSummarize',
+  'defaultProvider',
+  'defaultPromptIndex',
+  'openMode',
+];
 
-// --- Quick Summarize: dynamically toggle popup ---
-// When Quick Summarize is ON, we remove the popup so chrome.action.onClicked fires.
-// When OFF, we restore the popup so clicking the icon shows the normal UI.
-async function applyQuickSummarizeMode(enabled) {
-  await chrome.action.setPopup({ popup: enabled ? '' : 'popup.html' });
+let cachedToolbarSettings = null;
+let toolbarSettingsCacheReady = false;
+const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']);
+let pendingPayloadMutation = Promise.resolve();
+let toolbarSettingsRevision = 0;
+let latestScheduledToolbarRevision = -1;
+let latestToolbarSettings = {};
+let toolbarApplyGeneration = 0;
+let toolbarApplyPromise = null;
+let openModeRevision = 0;
+let latestScheduledMenuRevision = -1;
+let latestMenuOpenMode;
+let menuApplyGeneration = 0;
+let menuApplyPromise = null;
+let latestEmbeddingCustomUrls = {};
+let embeddingRefreshGeneration = 0;
+let embeddingRefreshPromise = null;
+let embeddingSettingsRevision = 0;
+let latestScheduledEmbeddingRevision = -1;
+let nextSummarizeInvocationSequence = 0;
+const sidePanelInvocationSequences = new Map();
+
+async function applyToolbarAction(
+  settings = {},
+  isCurrent = () => true,
+  forceToolbarActionPersistence = false,
+) {
+  const toolbarAction = resolveToolbarAction(settings);
+  const config = getToolbarChromeConfig(toolbarAction);
+
+  const chromeResults = await Promise.allSettled([
+    chrome.action.setPopup({ popup: config.popup }),
+    chrome.sidePanel.setPanelBehavior({
+      openPanelOnActionClick: config.openPanelOnActionClick,
+    }),
+  ]);
+  const failedChromeOperation = chromeResults.find((result) => result.status === 'rejected');
+  if (failedChromeOperation) throw failedChromeOperation.reason;
+
+  let persistedToolbarAction = false;
+  if (isCurrent()
+    && (forceToolbarActionPersistence || settings.toolbarAction !== toolbarAction)) {
+    await chrome.storage.sync.set({ toolbarAction });
+    persistedToolbarAction = true;
+  }
+  return { persistedToolbarAction };
 }
 
-// Apply on startup
-chrome.storage.sync.get(['quickSummarize'], (data) => {
-  applyQuickSummarizeMode(!!data.quickSummarize);
+function scheduleToolbarAction(settings = {}, settingsRevision = toolbarSettingsRevision) {
+  if (settingsRevision < toolbarSettingsRevision
+    || settingsRevision < latestScheduledToolbarRevision) {
+    return toolbarApplyPromise || Promise.resolve();
+  }
+  latestScheduledToolbarRevision = settingsRevision;
+  latestToolbarSettings = settings && typeof settings === 'object' ? { ...settings } : {};
+  toolbarApplyGeneration += 1;
+
+  if (!toolbarApplyPromise) {
+    toolbarApplyPromise = (async () => {
+      let completedGeneration = 0;
+      let forceToolbarActionPersistence = false;
+      while (completedGeneration < toolbarApplyGeneration) {
+        const requestedGeneration = toolbarApplyGeneration;
+        const requestedSettings = latestToolbarSettings;
+        const toolbarAction = resolveToolbarAction(requestedSettings);
+        cachedToolbarSettings = {
+          ...(cachedToolbarSettings || {}),
+          ...requestedSettings,
+          toolbarAction,
+        };
+        toolbarSettingsCacheReady = true;
+        try {
+          const persistenceWasRequired = forceToolbarActionPersistence;
+          const result = await applyToolbarAction(
+            requestedSettings,
+            () => requestedGeneration === toolbarApplyGeneration,
+            forceToolbarActionPersistence,
+          );
+          const requestIsCurrent = requestedGeneration === toolbarApplyGeneration;
+          forceToolbarActionPersistence = persistenceWasRequired
+            ? !(result.persistedToolbarAction && requestIsCurrent)
+            : result.persistedToolbarAction && !requestIsCurrent;
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= toolbarApplyGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      toolbarApplyPromise = null;
+    });
+  }
+
+  return toolbarApplyPromise;
+}
+
+function scheduleContextMenus(openMode, menuRevision = openModeRevision) {
+  if (menuRevision < openModeRevision || menuRevision < latestScheduledMenuRevision) {
+    return menuApplyPromise || Promise.resolve();
+  }
+  latestScheduledMenuRevision = menuRevision;
+  latestMenuOpenMode = openMode;
+  menuApplyGeneration += 1;
+
+  if (!menuApplyPromise) {
+    menuApplyPromise = (async () => {
+      let completedGeneration = 0;
+      while (completedGeneration < menuApplyGeneration) {
+        const requestedGeneration = menuApplyGeneration;
+        const requestedOpenMode = latestMenuOpenMode;
+        try {
+          await createContextMenus(
+            requestedOpenMode,
+            () => requestedGeneration === menuApplyGeneration,
+          );
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= menuApplyGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      menuApplyPromise = null;
+    });
+  }
+
+  return menuApplyPromise;
+}
+
+async function syncEmbeddingConfiguration(customUrls = {}) {
+  const desiredRules = buildEmbeddingRules(chrome.runtime.id, customUrls);
+  const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
+  const managedRuleIds = existingRules
+    .filter((rule) => rule.id >= MANAGED_RULE_ID_MIN && rule.id < MANAGED_RULE_ID_MAX)
+    .map((rule) => rule.id);
+
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: managedRuleIds,
+    addRules: desiredRules,
+  });
+
+  const registered = await chrome.scripting.getRegisteredContentScripts({
+    ids: [...CUSTOM_SCRIPT_IDS],
+  });
+  const registeredIds = registered
+    .map((item) => item.id)
+    .filter((id) => CUSTOM_SCRIPT_IDS.includes(id));
+  if (registeredIds.length > 0) {
+    await chrome.scripting.unregisterContentScripts({ ids: registeredIds });
+  }
+
+  const desiredScripts = buildCustomContentScriptRegistrations(customUrls);
+  if (desiredScripts.length > 0) {
+    await chrome.scripting.registerContentScripts(desiredScripts);
+  }
+}
+
+function scheduleEmbeddingConfiguration(customUrls = {}, settingsRevision = embeddingSettingsRevision) {
+  if (settingsRevision < latestScheduledEmbeddingRevision) {
+    return embeddingRefreshPromise || Promise.resolve();
+  }
+  latestScheduledEmbeddingRevision = settingsRevision;
+  latestEmbeddingCustomUrls = customUrls && typeof customUrls === 'object'
+    ? { ...customUrls }
+    : {};
+  embeddingRefreshGeneration += 1;
+
+  if (!embeddingRefreshPromise) {
+    embeddingRefreshPromise = (async () => {
+      let completedGeneration = 0;
+      while (completedGeneration < embeddingRefreshGeneration) {
+        const requestedGeneration = embeddingRefreshGeneration;
+        const requestedCustomUrls = latestEmbeddingCustomUrls;
+        try {
+          await syncEmbeddingConfiguration(requestedCustomUrls);
+        } catch (error) {
+          completedGeneration = requestedGeneration;
+          if (requestedGeneration >= embeddingRefreshGeneration) throw error;
+          continue;
+        }
+        completedGeneration = requestedGeneration;
+      }
+    })().finally(() => {
+      embeddingRefreshPromise = null;
+    });
+  }
+
+  return embeddingRefreshPromise;
+}
+
+async function initializeExtension(settingsPromise, { initializeMenus = false } = {}) {
+  const requestedToolbarRevision = toolbarSettingsRevision;
+  const requestedMenuRevision = openModeRevision;
+  const requestedEmbeddingRevision = embeddingSettingsRevision;
+  const settings = await (settingsPromise
+    || chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']));
+  const operations = [
+    scheduleToolbarAction(settings, requestedToolbarRevision),
+    scheduleEmbeddingConfiguration(settings.customUrls || {}, requestedEmbeddingRevision),
+  ];
+  if (initializeMenus) {
+    operations.push(scheduleContextMenus(settings.openMode, requestedMenuRevision));
+  }
+  await Promise.all(operations);
+}
+
+void initializeExtension(startupSettingsPromise).catch((error) => {
+  console.error('[PageMind] Initialization failed:', error);
 });
 
-// React to setting changes (from options page)
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'sync' && changes.quickSummarize) {
-    applyQuickSummarizeMode(!!changes.quickSummarize.newValue);
+  if (area !== 'sync') return;
+
+  const changedToolbarKeys = TOOLBAR_SETTING_KEYS.filter((key) => changes[key]);
+  if (changedToolbarKeys.length > 0) {
+    toolbarSettingsRevision += 1;
+    const requestedToolbarRevision = toolbarSettingsRevision;
+    cachedToolbarSettings = changedToolbarKeys.reduce((settings, key) => ({
+      ...settings,
+      [key]: changes[key].newValue,
+    }), cachedToolbarSettings || {});
+    void chrome.storage.sync.get(TOOLBAR_SETTING_KEYS)
+      .then((settings) => scheduleToolbarAction(settings, requestedToolbarRevision))
+      .catch((error) => console.error('[PageMind] Toolbar update failed:', error));
+  }
+  if (changes.openMode) {
+    openModeRevision += 1;
+    void scheduleContextMenus(changes.openMode.newValue, openModeRevision)
+      .catch((error) => console.error('[PageMind] Context menu update failed:', error));
+  }
+  if (changes.customUrls) {
+    embeddingSettingsRevision += 1;
+    void scheduleEmbeddingConfiguration(changes.customUrls.newValue || {}, embeddingSettingsRevision)
+      .catch((error) => console.error('[PageMind] Embedding update failed:', error));
   }
 });
 
-// Handle icon click when popup is disabled (Quick Summarize mode)
-chrome.action.onClicked.addListener(async () => {
-  try {
-    const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
-    const provider = settings.defaultProvider || 'chatgpt';
-    const promptIndex = settings.defaultPromptIndex ?? 0;
-    await handleSummarize({ provider, promptIndex });
-  } catch (err) {
-    console.error('[PageMind] Quick summarize failed:', err);
+function startDirectSummaryFromAction(tab, settings) {
+  const toolbarAction = resolveToolbarAction(settings);
+  if (!getToolbarChromeConfig(toolbarAction).directSummarize) return;
+
+  const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+  const sourceTabId = Number.isInteger(tab?.id) ? tab.id : undefined;
+  const destination = normalizeOpenMode(settings.openMode);
+  let panelOpen = Promise.resolve();
+  if (destination === 'sidepanel') {
+    try {
+      panelOpen = chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      });
+    } catch (error) {
+      console.error('[PageMind] Direct summarize failed:', error);
+      return;
+    }
   }
+
+  void panelOpen.then(() => handleSummarize({
+    provider: settings.defaultProvider || 'chatgpt',
+    promptIndex: settings.defaultPromptIndex ?? 0,
+    sourceTabId,
+    sourceWindowId,
+    source: 'toolbar',
+    destination,
+  })).catch((error) => {
+    console.error('[PageMind] Direct summarize failed:', error);
+  });
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  if (toolbarSettingsCacheReady && cachedToolbarSettings) {
+    startDirectSummaryFromAction(tab, cachedToolbarSettings);
+    return;
+  }
+
+  // Chrome extension API callbacks inherit the user gesture present when the
+  // API was invoked, so this cold-worker lookup must start inside onClicked.
+  chrome.storage.sync.get(TOOLBAR_SETTING_KEYS, (settings) => {
+    if (chrome.runtime.lastError) {
+      console.error('[PageMind] Toolbar settings failed:', chrome.runtime.lastError.message);
+      return;
+    }
+    startDirectSummaryFromAction(tab, settings);
+  });
 });
 
 // --- Context Menus ---
-chrome.runtime.onInstalled.addListener(() => {
-  // Also apply quick summarize mode on install/update
-  chrome.storage.sync.get(['quickSummarize'], (data) => {
-    applyQuickSummarizeMode(!!data.quickSummarize);
-  });
+const SUMMARY_MENU_DESTINATIONS = new Map([
+  ['summarize-page-sidepanel', 'sidepanel'],
+  ['summarize-page-companion', 'companion'],
+  ['summarize-page-newtab', 'newtab'],
+]);
 
+async function createContextMenus(configuredOpenMode, isCurrent = () => true) {
+  let destination = configuredOpenMode;
+  if (destination === undefined) {
+    const settings = await chrome.storage.sync.get(['openMode']);
+    destination = settings.openMode;
+  }
+  destination = normalizeOpenMode(destination);
+
+  await chrome.contextMenus.removeAll();
+  if (!isCurrent()) return;
   chrome.contextMenus.create({
-    id: 'summarize-page',
+    id: `summarize-page-${destination}`,
     title: 'Summarize This Page',
     contexts: ['page', 'frame', 'selection', 'link'],
   });
   chrome.contextMenus.create({
-    id: 'open-settings',
-    title: 'AI Summarizer Settings',
+    id: 'open-side-panel',
+    title: 'Open PageMind Side Panel',
     contexts: ['page', 'frame', 'selection', 'link'],
+  });
+  chrome.contextMenus.create({
+    id: 'open-settings',
+    title: 'PageMind Settings',
+    contexts: ['page', 'frame', 'selection', 'link'],
+  });
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  void initializeExtension(undefined, { initializeMenus: true }).catch((error) => {
+    console.error('[PageMind] Install initialization failed:', error);
   });
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === 'summarize-page') {
-    try {
-      const settings = await chrome.storage.sync.get(['defaultProvider', 'defaultPromptIndex']);
-      const provider = settings.defaultProvider || 'chatgpt';
-      const promptIndex = settings.defaultPromptIndex ?? 0;
-      // Pass the right-click selection text if present
-      const selectedText = info.selectionText?.trim() || '';
-      await handleSummarize({ provider, promptIndex, selectedText });
-    } catch (err) {
-      console.error('[AI Summarizer] Context menu summarize failed:', err);
-    }
-  } else if (info.menuItemId === 'open-settings') {
-    chrome.runtime.openOptionsPage();
+async function summarizeFromContextMenu(info, tab, destination, panelOpen) {
+  try {
+    const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+    const sourceTabId = Number.isInteger(tab?.id) ? tab.id : undefined;
+    await panelOpen;
+    const settings = await chrome.storage.sync.get([
+      'defaultProvider',
+      'defaultPromptIndex',
+    ]);
+    await handleSummarize({
+      provider: settings.defaultProvider || 'chatgpt',
+      promptIndex: settings.defaultPromptIndex ?? 0,
+      selectedText: typeof info.selectionText === 'string' ? info.selectionText.trim() : '',
+      sourceTabId,
+      sourceWindowId,
+      source: 'context-menu',
+      destination,
+    });
+  } catch (error) {
+    console.error('[PageMind] Context menu action failed:', error);
   }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const sourceWindowId = Number.isInteger(tab?.windowId) ? tab.windowId : undefined;
+  if (info?.menuItemId === 'open-side-panel') {
+    try {
+      void chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      }).catch((error) => console.error('[PageMind] Side panel open failed:', error));
+    } catch (error) {
+      console.error('[PageMind] Side panel open failed:', error);
+    }
+    return;
+  }
+  if (info?.menuItemId === 'open-settings') {
+    void chrome.runtime.openOptionsPage()
+      .catch((error) => console.error('[PageMind] Settings open failed:', error));
+    return;
+  }
+
+  const destination = SUMMARY_MENU_DESTINATIONS.get(info?.menuItemId);
+  if (!destination) return;
+
+  let panelOpen = Promise.resolve();
+  if (destination === 'sidepanel') {
+    try {
+      panelOpen = chrome.sidePanel.open({
+        windowId: sourceWindowId ?? chrome.windows.WINDOW_ID_CURRENT,
+      });
+    } catch (error) {
+      console.error('[PageMind] Context menu action failed:', error);
+      return;
+    }
+  }
+  void summarizeFromContextMenu(info, tab, destination, panelOpen);
 });
 
 // --- Restore main window when companion is closed ---
 chrome.windows.onRemoved.addListener(async (closedWindowId) => {
+  sidePanelInvocationSequences.delete(closedWindowId);
   try {
     const data = await chrome.storage.session.get(['companionWindowId', 'originalWindowBounds']);
     if (data.companionWindowId !== closedWindowId) return;
 
-    // Clear companion tracking
     await chrome.storage.session.remove(['companionWindowId', 'originalWindowBounds']);
-
-    // Restore original window bounds
     const bounds = data.originalWindowBounds;
     if (bounds) {
       await chrome.windows.update(bounds.id, {
@@ -90,67 +429,338 @@ chrome.windows.onRemoved.addListener(async (closedWindowId) => {
         width: bounds.width,
         height: bounds.height,
         state: 'normal',
-      }).catch(() => { });
+      }).catch(() => {});
     }
-  } catch { /* non-fatal */ }
+  } catch {
+    // Non-fatal: companion cleanup should not break the service worker.
+  }
 });
+
+function sendAsyncResponse(promise, sendResponse) {
+  promise
+    .then(sendResponse)
+    .catch((error) => sendResponse({ error: error?.message || String(error) }));
+  return true;
+}
+
+function serializePendingPayloadMutation(operation) {
+  const result = pendingPayloadMutation.then(operation, operation);
+  pendingPayloadMutation = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function payloadRouteKey(target) {
+  if (target?.kind === 'tab' && Number.isInteger(target.tabId)) return `tab:${target.tabId}`;
+  if (target?.kind === 'sidepanel' && Number.isInteger(target.windowId)) {
+    return `sidepanel:${target.windowId}`;
+  }
+  return null;
+}
+
+function requestRouteKey(request) {
+  if (request?.context === 'tab' && Number.isInteger(request.tabId)) return `tab:${request.tabId}`;
+  if (request?.context === 'sidepanel' && Number.isInteger(request.windowId)) {
+    return `sidepanel:${request.windowId}`;
+  }
+  return null;
+}
+
+function payloadRequest(payload) {
+  if (payload?.target?.kind === 'tab') {
+    return { provider: payload.provider, context: 'tab', tabId: payload.target.tabId };
+  }
+  return {
+    provider: payload?.provider,
+    context: 'sidepanel',
+    windowId: payload?.target?.windowId,
+  };
+}
+
+async function readPendingPayloadRoutes(now = Date.now()) {
+  const data = await chrome.storage.session.get(['pendingPayloads', 'pendingPayload']);
+  const routes = {};
+  let dirty = data.pendingPayload !== undefined;
+
+  if (data.pendingPayloads && typeof data.pendingPayloads === 'object' && !Array.isArray(data.pendingPayloads)) {
+    for (const payload of Object.values(data.pendingPayloads)) {
+      const key = payloadRouteKey(payload?.target);
+      if (!key || matchPayloadRequest(payload, payloadRequest(payload), now).expired) {
+        dirty = true;
+        continue;
+      }
+      routes[key] = payload;
+    }
+  } else if (data.pendingPayloads !== undefined) {
+    dirty = true;
+  }
+
+  if (data.pendingPayload) {
+    const legacyKey = payloadRouteKey(data.pendingPayload.target);
+    if (legacyKey
+      && !routes[legacyKey]
+      && !matchPayloadRequest(data.pendingPayload, payloadRequest(data.pendingPayload), now).expired) {
+      routes[legacyKey] = data.pendingPayload;
+    }
+  }
+  return { dirty, hadLegacy: data.pendingPayload !== undefined, routes };
+}
+
+async function persistPendingPayloadRoutes(state) {
+  await chrome.storage.session.set({ pendingPayloads: state.routes });
+  if (state.hadLegacy) await chrome.storage.session.remove(['pendingPayload']);
+}
+
+async function removePendingPayloadRouteFromStorage(payload) {
+  const key = payloadRouteKey(payload?.target);
+  if (!key) return false;
+  const state = await readPendingPayloadRoutes();
+  if (state.routes[key]?.id !== payload.id) {
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return false;
+  }
+  delete state.routes[key];
+  state.dirty = true;
+  await persistPendingPayloadRoutes(state);
+  return true;
+}
+
+function removePendingPayloadRouteIfExpected(payload) {
+  return serializePendingPayloadMutation(() => removePendingPayloadRouteFromStorage(payload));
+}
+
+function capPendingPayloadRoutes(routes, protectedKey) {
+  const excess = Object.keys(routes).length - MAX_PENDING_PAYLOAD_ROUTES;
+  if (excess <= 0) return;
+  const oldestKeys = Object.entries(routes)
+    .filter(([key]) => key !== protectedKey)
+    .sort(([leftKey, left], [rightKey, right]) => (
+      left.createdAt - right.createdAt || leftKey.localeCompare(rightKey)
+    ))
+    .slice(0, excess)
+    .map(([key]) => key);
+  for (const key of oldestKeys) delete routes[key];
+}
+
+function storePendingPayload(payload, isCurrent) {
+  return serializePendingPayloadMutation(async () => {
+    if (isCurrent && !isCurrent()) return false;
+    const state = await readPendingPayloadRoutes();
+    if (isCurrent && !isCurrent()) return false;
+    const key = payloadRouteKey(payload.target);
+    const previousRoutes = { ...state.routes };
+    state.routes[key] = payload;
+    capPendingPayloadRoutes(state.routes, key);
+    await persistPendingPayloadRoutes(state);
+    if (isCurrent && !isCurrent()) {
+      await persistPendingPayloadRoutes({ ...state, routes: previousRoutes });
+      return false;
+    }
+    return true;
+  });
+}
+
+function registerSidePanelInvocation(windowId, invocationSequence) {
+  const currentSequence = sidePanelInvocationSequences.get(windowId);
+  if (Number.isInteger(currentSequence) && currentSequence >= invocationSequence) return false;
+  sidePanelInvocationSequences.set(windowId, invocationSequence);
+  return true;
+}
+
+function isCurrentSidePanelInvocation(windowId, invocationSequence) {
+  return sidePanelInvocationSequences.get(windowId) === invocationSequence;
+}
+
+function reserveSidePanelInvocation(windowId, invocationSequence) {
+  registerSidePanelInvocation(windowId, invocationSequence);
+  return {
+    windowId,
+    invocationSequence,
+    isCurrent: () => isCurrentSidePanelInvocation(windowId, invocationSequence),
+  };
+}
+
+async function consumePendingPayload(message, sender) {
+  if (message.context === 'tab' && sender.frameId !== 0) {
+    return { payload: null };
+  }
+  if (message.context === 'sidepanel' && !isTrustedSidePanelSender(sender)) {
+    return { payload: null };
+  }
+  const request = {
+    provider: typeof message.provider === 'string' ? message.provider : '',
+    context: message.context,
+    windowId: Number.isInteger(message.windowId) ? message.windowId : undefined,
+    tabId: Number.isInteger(sender.tab?.id) ? sender.tab.id : undefined,
+  };
+  return serializePendingPayloadMutation(async () => {
+    const snapshot = await readPendingPayloadRoutes();
+    const key = requestRouteKey(request);
+    const snapshotPayload = key ? snapshot.routes[key] : null;
+    const snapshotResult = matchPayloadRequest(snapshotPayload, request);
+
+    // Re-read immediately before mutation so an entry written after the first
+    // snapshot is never removed or delivered as the older route payload.
+    const state = await readPendingPayloadRoutes();
+    const payload = key ? state.routes[key] : null;
+    const result = snapshotResult.matched
+      ? matchPayloadRequest(payload, request)
+      : { matched: false, expired: false };
+    if (snapshotResult.matched && result.matched && payload.id === snapshotPayload.id) {
+      delete state.routes[key];
+      state.dirty = true;
+    }
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return {
+      payload: snapshotResult.matched && result.matched && payload.id === snapshotPayload.id
+        ? payload
+        : null,
+    };
+  });
+}
+
+function isTrustedSidePanelSender(sender) {
+  if (sender.tab || typeof sender.url !== 'string') return false;
+  try {
+    const senderUrl = new URL(sender.url);
+    const sidePanelUrl = new URL(chrome.runtime.getURL('sidepanel.html'));
+    return senderUrl.origin === sidePanelUrl.origin && senderUrl.pathname === sidePanelUrl.pathname;
+  } catch {
+    return false;
+  }
+}
+
+async function getPendingPanelProvider(message, sender) {
+  if (!isTrustedSidePanelSender(sender) || !Number.isInteger(message.windowId)) {
+    return { provider: null };
+  }
+  return serializePendingPayloadMutation(async () => {
+    await readPendingPayloadRoutes();
+    // PANEL_READY also revalidates after its first snapshot so it cannot
+    // reveal or clean up a route that has since been superseded.
+    const state = await readPendingPayloadRoutes();
+    const payload = state.routes[`sidepanel:${message.windowId}`];
+    if (state.dirty) await persistPendingPayloadRoutes(state);
+    return { provider: payload?.provider || null };
+  });
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || typeof message !== 'object' || typeof message.type !== 'string') return false;
+
   if (message.type === 'SUMMARIZE') {
-    handleSummarize(message)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err.message }));
-    return true; // keep message channel open for async response
+    return sendAsyncResponse(handleSummarize(message), sendResponse);
+  }
+  if (message.type === 'GET_PAYLOAD') {
+    return sendAsyncResponse(consumePendingPayload(message, sender), sendResponse);
+  }
+  if (message.type === 'PANEL_READY') {
+    return sendAsyncResponse(getPendingPanelProvider(message, sender), sendResponse);
   }
 
-  if (message.type === 'GET_PAYLOAD') {
-    // Called by injector content scripts to retrieve the pending payload
-    chrome.storage.session.get(['pendingPayload'], (data) => {
-      const payload = data.pendingPayload || null;
-      // Clear immediately — one-shot delivery
-      if (payload) {
-        chrome.storage.session.remove(['pendingPayload']);
-      }
-      sendResponse({ payload });
-    });
-    return true;
-  }
+  // PANEL_NAVIGATE is intentionally handled by the side-panel shell.
+  return false;
 });
 
-async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
-  const providerConfig = PROVIDERS[provider];
-  if (!providerConfig) throw new Error('Unknown provider: ' + provider);
+async function handleSummarize({
+  provider,
+  promptIndex,
+  selectedText = '',
+  sourceTabId,
+  sourceWindowId,
+  source,
+  destination,
+}) {
+  nextSummarizeInvocationSequence += 1;
+  const invocationSequence = nextSummarizeInvocationSequence;
 
-  // Get the active tab
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!activeTab?.id) throw new Error('No active tab found');
+  if (typeof provider !== 'string' || !Object.hasOwn(PROVIDERS, provider)) {
+    throw new Error(`Unknown provider: ${String(provider)}`);
+  }
 
-  const tabUrl = activeTab.url || '';
+  let sidePanelInvocation;
+  const hasKnownSidePanelDestination = source === 'sidepanel'
+    || (destination !== undefined && normalizeOpenMode(destination) === 'sidepanel');
+  if (hasKnownSidePanelDestination && Number.isInteger(sourceWindowId)) {
+    sidePanelInvocation = reserveSidePanelInvocation(sourceWindowId, invocationSequence);
+  }
+
+  let activeTab;
+  if (Number.isInteger(sourceTabId)) {
+    activeTab = await chrome.tabs.get(sourceTabId);
+    if (Number.isInteger(sourceWindowId) && activeTab?.windowId !== sourceWindowId) {
+      throw new Error('Source tab does not belong to the source window');
+    }
+  } else {
+    const query = { active: true };
+    if (Number.isInteger(sourceWindowId)) query.windowId = sourceWindowId;
+    else query.currentWindow = true;
+    [activeTab] = await chrome.tabs.query(query);
+  }
+  if (!Number.isInteger(activeTab?.id)) throw new Error('No active tab found');
+
+  const tabUrl = typeof activeTab.url === 'string' ? activeTab.url : '';
+  const settings = await chrome.storage.sync.get([
+    'customPrompts',
+    'customUrls',
+    'openMode',
+    'autoSubmit',
+    'includeUrl',
+    'maxContentChars',
+  ]);
+  const allPrompts = [...(Array.isArray(settings.customPrompts) ? settings.customPrompts : []), ...DEFAULT_PROMPTS];
+  const safePromptIndex = Number.isInteger(promptIndex) ? promptIndex : 0;
+  const prompt = allPrompts[safePromptIndex] ?? DEFAULT_PROMPTS[0];
+  const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
+  const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
+  const maxContentChars = Number.isInteger(settings.maxContentChars) && settings.maxContentChars > 0
+    ? settings.maxContentChars
+    : DEFAULT_MAX_CONTENT_CHARS;
+  const customUrls = settings.customUrls && typeof settings.customUrls === 'object'
+    ? settings.customUrls
+    : {};
+  const requestedDestination = resolveSummaryDestination(
+    destination ?? settings.openMode,
+    source,
+  );
+  const finalUrl = resolveProviderUrl(provider, customUrls);
+  const supersededResult = {
+    success: true,
+    superseded: true,
+    destination: 'sidepanel',
+    provider,
+    url: finalUrl,
+  };
+  if (requestedDestination === 'sidepanel') {
+    const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
+    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
+    if (!sidePanelInvocation) {
+      sidePanelInvocation = reserveSidePanelInvocation(windowId, invocationSequence);
+    }
+    if (!sidePanelInvocation.isCurrent()) return supersededResult;
+  }
   const isYouTube = tabUrl.includes('youtube.com/watch');
-
   let extractedContent;
-  let finalSelectedText = selectedText;
+  let finalSelectedText = typeof selectedText === 'string' ? selectedText.trim() : '';
 
-  // If no selected text provided (e.g., Quick Summarize or just button click), try to grab it dynamically across all frames
   if (!finalSelectedText) {
     try {
       const selResults = await chrome.scripting.executeScript({
         target: { tabId: activeTab.id, allFrames: true },
         func: () => window.getSelection().toString().trim(),
       });
-      // Combine selections if any frame had text selected
-      finalSelectedText = selResults.map(r => r.result).filter(Boolean).join('\n\n').trim();
-    } catch (e) {
-      // Ignored
+      finalSelectedText = selResults
+        .map((result) => result.result)
+        .filter((value) => typeof value === 'string' && value)
+        .join('\n\n')
+        .trim();
+    } catch {
+      // Selection access is best-effort; page extraction still works without it.
     }
   }
 
-  if (finalSelectedText.length > 0) {
-    // User highlighted text — use it directly, skip full page extraction
+  if (finalSelectedText) {
     extractedContent = `[Selected text from: ${activeTab.title || tabUrl}]\n\n${finalSelectedText}`;
   } else if (isYouTube) {
-    // youtube.js runs in MAIN world and fetches the transcript directly
-    // using XHR (which bypasses YouTube's Service Worker and sends cookies).
     const results = await chrome.scripting.executeScript({
       target: { tabId: activeTab.id },
       files: ['content/youtube.js'],
@@ -165,7 +775,6 @@ async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
       extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\n\n[Could not extract transcript]`;
     }
   } else {
-    // Inject Readability first (provides global Readability class), then extractor
     await chrome.scripting.executeScript({
       target: { tabId: activeTab.id },
       files: ['lib/readability.js'],
@@ -176,95 +785,110 @@ async function handleSummarize({ provider, promptIndex, selectedText = '' }) {
     });
     extractedContent = results[0]?.result;
     if (!extractedContent) {
-      extractedContent = `Page: ${activeTab.title}\n\n[Could not extract page content]`;
+      extractedContent = `Page: ${activeTab.title || tabUrl}\n\n[Could not extract page content]`;
     }
   }
 
-  // Get the selected prompt and settings in one call
-  const settings = await chrome.storage.sync.get(['customPrompts', 'customUrls', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars']);
-  const allPrompts = [...(settings.customPrompts || []), ...DEFAULT_PROMPTS];
-  const prompt = allPrompts[promptIndex] ?? DEFAULT_PROMPTS[0];
-  const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
-  const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
-  const maxContentChars = settings.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
-  const customUrls = settings.customUrls || {};
-
-  // Truncate content if needed
-  const truncated = extractedContent.length > maxContentChars
-    ? extractedContent.slice(0, maxContentChars) + '\n\n[Content truncated — article is too long]'
-    : extractedContent;
-
-  // Build full message: prompt + optional URL + content
-  let fullMessage = prompt;
-  if (includeUrl && tabUrl) {
-    fullMessage += `\n\nSource URL: ${tabUrl}`;
+  if (typeof extractedContent !== 'string') {
+    extractedContent = String(extractedContent ?? '');
   }
+
+  const truncated = extractedContent.length > maxContentChars
+    ? `${extractedContent.slice(0, maxContentChars)}\n\n[Content truncated — article is too long]`
+    : extractedContent;
+  let fullMessage = prompt;
+  if (includeUrl && tabUrl) fullMessage += `\n\nSource URL: ${tabUrl}`;
   fullMessage += `\n\n---\n\n${truncated}`;
 
-  // Store payload in session storage (ephemeral, cleared after injection)
-  await chrome.storage.session.set({
-    pendingPayload: {
+  if (sidePanelInvocation && !sidePanelInvocation.isCurrent()) return supersededResult;
+  try {
+    await writeToClipboard(fullMessage);
+  } catch (error) {
+    console.warn('[PageMind] Clipboard write failed:', error?.message || String(error));
+  }
+  if (sidePanelInvocation && !sidePanelInvocation.isCurrent()) return supersededResult;
+
+  if (requestedDestination === 'sidepanel') {
+    const { windowId, isCurrent } = sidePanelInvocation;
+    const payload = createPendingPayload({
+      id: crypto.randomUUID(),
       text: fullMessage,
       provider,
       autoSubmit,
-      createdAt: Date.now(),
-    },
-  });
-
-  // Also write to clipboard as fallback (via offscreen document)
-  try {
-    await writeToClipboard(fullMessage);
-  } catch (e) {
-    console.warn('[AI Summarizer] Clipboard write failed:', e.message);
+      target: { kind: 'sidepanel', windowId },
+    });
+    const stored = await storePendingPayload(payload, isCurrent);
+    if (!stored || !isCurrent()) {
+      if (stored) await removePendingPayloadRouteIfExpected(payload);
+      return supersededResult;
+    }
+    await chrome.runtime.sendMessage({
+      type: 'PANEL_NAVIGATE',
+      windowId,
+      provider,
+      url: finalUrl,
+    }).catch(() => {});
+    return { success: true, destination: 'sidepanel', provider, url: finalUrl };
   }
 
-  // Check open mode setting
-  const openMode = settings.openMode || 'companion';
-  const finalUrl = customUrls[provider] || providerConfig.url;
-
-  if (openMode === 'newtab') {
-    await chrome.tabs.create({ url: finalUrl, active: true });
+  let targetTabId;
+  if (requestedDestination === 'newtab') {
+    const targetTab = await chrome.tabs.create({ url: finalUrl, active: true });
+    targetTabId = targetTab?.id;
   } else {
-    await openCompanionWindow(finalUrl, activeTab.windowId);
+    const companion = await openCompanionWindow(finalUrl, activeTab.windowId);
+    targetTabId = companion?.tabs?.find((tab) => Number.isInteger(tab.id))?.id;
+    if (!Number.isInteger(targetTabId) && Number.isInteger(companion?.id)) {
+      const tabs = await chrome.tabs.query({ windowId: companion.id });
+      targetTabId = tabs.find((tab) => Number.isInteger(tab.id))?.id;
+    }
   }
 
-  return { success: true };
+  if (!Number.isInteger(targetTabId)) throw new Error('Provider tab was not created');
+  const payload = createPendingPayload({
+    id: crypto.randomUUID(),
+    text: fullMessage,
+    provider,
+    autoSubmit,
+    target: { kind: 'tab', tabId: targetTabId },
+  });
+  await storePendingPayload(payload);
+  return { success: true, destination: requestedDestination, provider, url: finalUrl };
 }
 
 // --- Companion Window ---
-// Resizes the main browser window to make room, then opens the AI provider
-// as a full-height popup window snapped to the right edge.
 async function openCompanionWindow(url, sourceWindowId) {
   const PANEL_WIDTH = 480;
-
   let currentWin;
   try {
-    currentWin = sourceWindowId
+    currentWin = Number.isInteger(sourceWindowId)
       ? await chrome.windows.get(sourceWindowId)
       : await chrome.windows.getCurrent({ populate: false });
   } catch {
     currentWin = null;
   }
 
-  if (!currentWin || currentWin.left == null) {
-    // Fallback: open in a new tab
-    await chrome.tabs.create({ url, active: true });
-    return;
+  if (!currentWin || currentWin.left == null || currentWin.width == null) {
+    const tab = await chrome.tabs.create({ url, active: true });
+    return {
+      id: Number.isInteger(tab?.windowId) ? tab.windowId : undefined,
+      tabs: tab ? [tab] : [],
+    };
   }
 
-  // Close any existing companion window first
   try {
     const stored = await chrome.storage.session.get(['companionWindowId']);
-    if (stored.companionWindowId) {
-      await chrome.windows.remove(stored.companionWindowId).catch(() => { });
-      // Small delay to let the window close and onRemoved fire before we overwrite the saved bounds
-      await new Promise((r) => setTimeout(r, 150));
-      // Re-fetch currentWin in case onRemoved already restored it
-      currentWin = await chrome.windows.get(sourceWindowId || currentWin.id).catch(() => currentWin);
+    if (Number.isInteger(stored.companionWindowId)) {
+      await chrome.windows.remove(stored.companionWindowId).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      currentWin = await chrome.windows
+        .get(sourceWindowId ?? currentWin.id)
+        .catch(() => currentWin);
     }
-  } catch { /* non-fatal */ }
+  } catch {
+    // Existing companion cleanup is best-effort.
+  }
 
-  // Save original bounds so we can restore on companion close
   const originalBounds = {
     id: currentWin.id,
     left: currentWin.left,
@@ -272,8 +896,6 @@ async function openCompanionWindow(url, sourceWindowId) {
     width: currentWin.width,
     height: currentWin.height,
   };
-
-  // Shrink the main window to sit beside the companion panel
   const mainWidth = Math.max(400, currentWin.width - PANEL_WIDTH);
   await chrome.windows.update(currentWin.id, {
     state: 'normal',
@@ -283,27 +905,25 @@ async function openCompanionWindow(url, sourceWindowId) {
     height: currentWin.height,
   });
 
-  // Open companion panel flush against the right edge of the (now-resized) main window
-  const companionLeft = currentWin.left + mainWidth;
   const newWin = await chrome.windows.create({
     url,
     type: 'popup',
     width: PANEL_WIDTH,
     height: currentWin.height,
-    left: companionLeft,
+    left: currentWin.left + mainWidth,
     top: currentWin.top,
     focused: true,
   });
+  if (!Number.isInteger(newWin?.id)) throw new Error('Companion window was not created');
 
-  // Persist tracking data
   await chrome.storage.session.set({
     companionWindowId: newWin.id,
     originalWindowBounds: originalBounds,
   });
+  return newWin;
 }
 
 // --- Clipboard via Offscreen Document ---
-// MV3 service workers can't access navigator.clipboard — use an offscreen doc
 async function writeToClipboard(text) {
   const existingContexts = await chrome.runtime.getContexts({
     contextTypes: ['OFFSCREEN_DOCUMENT'],
@@ -328,8 +948,7 @@ async function writeToClipboard(text) {
         } else {
           resolve();
         }
-      }
+      },
     );
   });
 }
-

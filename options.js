@@ -1,6 +1,12 @@
 // Options page script
 
 import { DEFAULT_PROMPTS } from './lib/providers.js';
+import { normalizeOpenMode, resolveToolbarAction } from './lib/settings.js';
+
+const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
+const MIN_CONTENT_CHARS = 1000;
+const MAX_CONTENT_CHARS = 100000;
+const DEFAULT_CONTENT_CHARS = 12000;
 
 let customPrompts = [];
 let customUrls = {};
@@ -9,92 +15,161 @@ let defaultPromptIndex = 0;
 let openMode = 'companion';
 let autoSubmit = true;
 let includeUrl = true;
-let maxContentChars = 12000;
-let quickSummarize = false;
-
-// Debounce timer for auto-save
+let maxContentChars = DEFAULT_CONTENT_CHARS;
+let toolbarAction = 'popup';
 let saveTimer = null;
+let feedbackTimer = null;
+let saveInFlight = false;
+let isExiting = false;
+const dirtyKeys = new Set();
 
-document.addEventListener('DOMContentLoaded', () => {
-  loadSettings();
-
-  document.getElementById('addPromptBtn').addEventListener('click', () => {
-    addPrompt();
-    autoSave();
-  });
-  document.getElementById('newPromptInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      addPrompt();
-      autoSave();
-    }
-  });
-
-  document.getElementById('providerGrid').addEventListener('click', (e) => {
-    const btn = e.target.closest('.provider-btn');
-    if (!btn) return;
-    defaultProvider = btn.dataset.provider;
-    updateProviderButtons();
-    autoSave();
-  });
-
-  // Auto-save on any option change
-  document.querySelectorAll('input[name="openMode"]').forEach((radio) => {
-    radio.addEventListener('change', () => autoSave());
-  });
-  document.getElementById('autoSubmitToggle').addEventListener('change', () => autoSave());
-  document.getElementById('includeUrlToggle').addEventListener('change', () => autoSave());
-  document.getElementById('quickSummarizeToggle').addEventListener('change', () => autoSave());
-  document.getElementById('maxCharsInput').addEventListener('change', () => autoSave());
-
-  // URL input listeners
-  ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
-    document.getElementById(`url-${id}`).addEventListener('input', () => autoSave());
-  });
-
-  document.getElementById('defaultPromptSelect').addEventListener('change', (e) => {
-    defaultPromptIndex = parseInt(e.target.value, 10);
-    autoSave();
-  });
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadSettings();
+  registerEventListeners();
+  window.addEventListener('pagehide', flushOnPageHide);
+  window.addEventListener('pageshow', resumeAfterPageShow);
 });
 
-function loadSettings() {
-  chrome.storage.sync.get(
-    ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
-    (data) => {
-      customPrompts = data.customPrompts || [];
-      customUrls = data.customUrls || {};
-      defaultProvider = data.defaultProvider || 'chatgpt';
-      defaultPromptIndex = data.defaultPromptIndex ?? 0;
-      openMode = data.openMode || 'companion';
-      autoSubmit = data.autoSubmit !== undefined ? data.autoSubmit : true;
-      includeUrl = data.includeUrl !== undefined ? data.includeUrl : true;
-      maxContentChars = data.maxContentChars || 12000;
-      quickSummarize = data.quickSummarize || false;
-
-      updateProviderButtons();
-      renderPromptList();
-      renderDefaultPromptSelect();
-
-      // Populate custom URLs
-      ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
-        document.getElementById(`url-${id}`).value = customUrls[id] || '';
-      });
-
-      const radio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
-      if (radio) radio.checked = true;
-
-      document.getElementById('autoSubmitToggle').checked = autoSubmit;
-      document.getElementById('includeUrlToggle').checked = includeUrl;
-      document.getElementById('quickSummarizeToggle').checked = quickSummarize;
-      document.getElementById('maxCharsInput').value = maxContentChars;
+function registerEventListeners() {
+  document.getElementById('addPromptBtn').addEventListener('click', () => {
+    if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
+  });
+  document.getElementById('newPromptInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      if (addPrompt()) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
     }
-  );
+  });
+
+  document.getElementById('providerGrid').addEventListener('click', (event) => {
+    const button = event.target.closest('.provider-btn');
+    if (!button || !PROVIDERS.includes(button.dataset.provider)) return;
+    defaultProvider = button.dataset.provider;
+    updateProviderButtons();
+    autoSave('defaultProvider', 'lastProvider');
+  });
+
+  document.querySelectorAll('input[name="openMode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      openMode = normalizeOpenMode(radio.value);
+      autoSave('openMode');
+    });
+  });
+  document.querySelectorAll('input[name="toolbarAction"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      toolbarAction = resolveToolbarAction({ toolbarAction: radio.value });
+      autoSave('toolbarAction');
+    });
+  });
+  document.getElementById('autoSubmitToggle').addEventListener('change', (event) => {
+    autoSubmit = Boolean(event.target.checked);
+    autoSave('autoSubmit');
+  });
+  document.getElementById('includeUrlToggle').addEventListener('change', (event) => {
+    includeUrl = Boolean(event.target.checked);
+    autoSave('includeUrl');
+  });
+  document.getElementById('maxCharsInput').addEventListener('change', (event) => {
+    maxContentChars = normalizeMaxContentChars(Number(event.target.value));
+    event.target.value = maxContentChars;
+    autoSave('maxContentChars');
+  });
+
+  PROVIDERS.forEach((provider) => {
+    document.getElementById(`url-${provider}`).addEventListener('input', () => autoSave('customUrls'));
+  });
+
+  document.getElementById('defaultPromptSelect').addEventListener('change', (event) => {
+    defaultPromptIndex = normalizePromptIndex(Number(event.target.value));
+    autoSave('defaultPromptIndex', 'lastPromptIndex');
+  });
+}
+
+function loadSettings() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(
+      ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
+      (data) => {
+        try {
+          if (chrome.runtime?.lastError) {
+            console.warn('[PageMind] Could not load settings:', chrome.runtime.lastError.message);
+          }
+          applySettings(data);
+          renderSettings();
+        } catch (error) {
+          console.error('[PageMind] Could not render settings:', error);
+          applySettings({});
+          renderSettings();
+        } finally {
+          resolve();
+        }
+      }
+    );
+  });
+}
+
+function applySettings(data) {
+  const settings = isPlainObject(data) ? data : {};
+  customPrompts = Array.isArray(settings.customPrompts)
+    ? settings.customPrompts.map((prompt) => typeof prompt === 'string' ? prompt.trim() : '').filter(Boolean)
+    : [];
+  customUrls = normalizeCustomUrls(settings.customUrls);
+  defaultProvider = PROVIDERS.includes(settings.defaultProvider) ? settings.defaultProvider : 'chatgpt';
+  defaultPromptIndex = normalizePromptIndex(settings.defaultPromptIndex);
+  openMode = normalizeOpenMode(settings.openMode);
+  toolbarAction = resolveToolbarAction(settings);
+  autoSubmit = typeof settings.autoSubmit === 'boolean' ? settings.autoSubmit : true;
+  includeUrl = typeof settings.includeUrl === 'boolean' ? settings.includeUrl : true;
+  maxContentChars = normalizeMaxContentChars(settings.maxContentChars);
+}
+
+function renderSettings() {
+  updateProviderButtons();
+  renderPromptList();
+  renderDefaultPromptSelect();
+  PROVIDERS.forEach((provider) => {
+    document.getElementById(`url-${provider}`).value = customUrls[provider] ?? '';
+  });
+
+  const modeRadio = document.querySelector(`input[name="openMode"][value="${openMode}"]`);
+  if (modeRadio) modeRadio.checked = true;
+  const toolbarRadio = document.querySelector(`input[name="toolbarAction"][value="${toolbarAction}"]`);
+  if (toolbarRadio) toolbarRadio.checked = true;
+  document.getElementById('autoSubmitToggle').checked = autoSubmit;
+  document.getElementById('includeUrlToggle').checked = includeUrl;
+  document.getElementById('maxCharsInput').value = maxContentChars;
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeCustomUrls(value) {
+  if (!isPlainObject(value)) return {};
+  return Object.fromEntries(PROVIDERS.flatMap((provider) => {
+    const url = value[provider];
+    return typeof url === 'string' ? [[provider, url]] : [];
+  }));
+}
+
+function normalizePromptIndex(value) {
+  const maxIndex = Math.max(0, customPrompts.length + DEFAULT_PROMPTS.length - 1);
+  if (!Number.isInteger(value)) return 0;
+  return Math.min(Math.max(value, 0), maxIndex);
+}
+
+function normalizeMaxContentChars(value) {
+  if (!Number.isInteger(value)) return DEFAULT_CONTENT_CHARS;
+  return Math.min(Math.max(value, MIN_CONTENT_CHARS), MAX_CONTENT_CHARS);
 }
 
 function updateProviderButtons() {
-  document.querySelectorAll('.provider-btn').forEach((btn) => {
-    btn.classList.toggle('selected', btn.dataset.provider === defaultProvider);
+  document.querySelectorAll('.provider-btn').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.provider === defaultProvider);
   });
 }
 
@@ -102,11 +177,11 @@ function renderDefaultPromptSelect() {
   const select = document.getElementById('defaultPromptSelect');
   const allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
   select.innerHTML = '';
-  allPrompts.forEach((prompt, i) => {
+  allPrompts.forEach((prompt, index) => {
     const option = document.createElement('option');
-    option.value = i;
-    option.textContent = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt;
-    if (i === defaultPromptIndex) option.selected = true;
+    option.value = index;
+    option.textContent = prompt.length > 60 ? `${prompt.slice(0, 60)}…` : prompt;
+    if (index === defaultPromptIndex) option.selected = true;
     select.appendChild(option);
   });
 }
@@ -120,139 +195,193 @@ function renderPromptList() {
     customHeader.className = 'section-divider';
     customHeader.textContent = 'Custom Prompts';
     list.appendChild(customHeader);
-
-    customPrompts.forEach((prompt, i) => {
-      list.appendChild(createPromptItem(prompt, i, 'custom'));
-    });
+    customPrompts.forEach((prompt, index) => list.appendChild(createPromptItem(prompt, index, 'custom')));
   }
 
   const builtinHeader = document.createElement('li');
   builtinHeader.className = 'section-divider';
   builtinHeader.textContent = 'Built-in Prompts';
   list.appendChild(builtinHeader);
-
-  DEFAULT_PROMPTS.forEach((prompt) => {
-    list.appendChild(createPromptItem(prompt, -1, 'builtin'));
-  });
+  DEFAULT_PROMPTS.forEach((prompt) => list.appendChild(createPromptItem(prompt, -1, 'builtin')));
 }
 
 function createPromptItem(prompt, index, type) {
-  const li = document.createElement('li');
-  li.className = `prompt-item ${type}`;
+  const item = document.createElement('li');
+  item.className = `prompt-item ${type}`;
 
   const text = document.createElement('span');
   text.className = 'prompt-text';
   text.textContent = prompt;
-  li.appendChild(text);
+  item.appendChild(text);
 
   const tag = document.createElement('span');
   tag.className = 'prompt-tag';
   tag.textContent = type === 'custom' ? 'Custom' : 'Built-in';
-  li.appendChild(tag);
+  item.appendChild(tag);
 
   if (type === 'custom') {
-    const upBtn = document.createElement('button');
-    upBtn.className = 'icon-btn up';
-    upBtn.title = 'Move up';
-    upBtn.textContent = '↑';
-    upBtn.disabled = index === 0;
-    upBtn.addEventListener('click', () => { movePrompt(index, -1); autoSave(); });
-    li.appendChild(upBtn);
+    const upButton = document.createElement('button');
+    upButton.className = 'icon-btn up';
+    upButton.title = 'Move up';
+    upButton.textContent = '↑';
+    upButton.disabled = index === 0;
+    upButton.addEventListener('click', () => {
+      if (movePrompt(index, -1)) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
+    });
+    item.appendChild(upButton);
 
-    const downBtn = document.createElement('button');
-    downBtn.className = 'icon-btn down';
-    downBtn.title = 'Move down';
-    downBtn.textContent = '↓';
-    downBtn.disabled = index === customPrompts.length - 1;
-    downBtn.addEventListener('click', () => { movePrompt(index, 1); autoSave(); });
-    li.appendChild(downBtn);
+    const downButton = document.createElement('button');
+    downButton.className = 'icon-btn down';
+    downButton.title = 'Move down';
+    downButton.textContent = '↓';
+    downButton.disabled = index === customPrompts.length - 1;
+    downButton.addEventListener('click', () => {
+      if (movePrompt(index, 1)) autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
+    });
+    item.appendChild(downButton);
 
-    const delBtn = document.createElement('button');
-    delBtn.className = 'icon-btn';
-    delBtn.title = 'Remove';
-    delBtn.textContent = '✕';
-    delBtn.addEventListener('click', () => { removePrompt(index); autoSave(); });
-    li.appendChild(delBtn);
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'icon-btn';
+    deleteButton.title = 'Remove';
+    deleteButton.textContent = '✕';
+    deleteButton.addEventListener('click', () => {
+      removePrompt(index);
+      autoSave('customPrompts', 'defaultPromptIndex', 'lastPromptIndex');
+    });
+    item.appendChild(deleteButton);
   }
 
-  return li;
+  return item;
 }
 
 function addPrompt() {
   const input = document.getElementById('newPromptInput');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text) return false;
   customPrompts.unshift(text);
-  // Shift defaultPromptIndex since we inserted at position 0
-  defaultPromptIndex += 1;
+  defaultPromptIndex = normalizePromptIndex(defaultPromptIndex + 1);
   input.value = '';
   renderPromptList();
   renderDefaultPromptSelect();
+  return true;
 }
 
 function removePrompt(index) {
   customPrompts.splice(index, 1);
-  // Adjust defaultPromptIndex
-  if (defaultPromptIndex === index) {
-    defaultPromptIndex = 0;
-  } else if (defaultPromptIndex > index) {
-    defaultPromptIndex -= 1;
-  }
+  if (defaultPromptIndex === index) defaultPromptIndex = 0;
+  else if (defaultPromptIndex > index) defaultPromptIndex -= 1;
+  defaultPromptIndex = normalizePromptIndex(defaultPromptIndex);
   renderPromptList();
   renderDefaultPromptSelect();
 }
 
 function movePrompt(index, direction) {
   const newIndex = index + direction;
-  if (newIndex < 0 || newIndex >= customPrompts.length) return;
-  const temp = customPrompts[index];
-  customPrompts[index] = customPrompts[newIndex];
-  customPrompts[newIndex] = temp;
-  // Adjust defaultPromptIndex if it was one of the swapped items
-  if (defaultPromptIndex === index) {
-    defaultPromptIndex = newIndex;
-  } else if (defaultPromptIndex === newIndex) {
-    defaultPromptIndex = index;
-  }
+  if (newIndex < 0 || newIndex >= customPrompts.length) return false;
+  [customPrompts[index], customPrompts[newIndex]] = [customPrompts[newIndex], customPrompts[index]];
+  if (defaultPromptIndex === index) defaultPromptIndex = newIndex;
+  else if (defaultPromptIndex === newIndex) defaultPromptIndex = index;
   renderPromptList();
   renderDefaultPromptSelect();
+  return true;
 }
 
-// Auto-save with debounce (300ms)
-function autoSave() {
+function autoSave(...keys) {
+  keys.forEach((key) => dirtyKeys.add(key));
+  scheduleSave();
+}
+
+function scheduleSave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveSettings, 300);
+  saveTimer = setTimeout(flushDirtySettings, 300);
 }
 
-function saveSettings() {
-  const selectedMode = document.querySelector('input[name="openMode"]:checked')?.value || 'companion';
-  const autoSubmitVal = document.getElementById('autoSubmitToggle')?.checked ?? true;
-  const includeUrlVal = document.getElementById('includeUrlToggle')?.checked ?? true;
-  const maxCharsVal = parseInt(document.getElementById('maxCharsInput')?.value, 10) || 12000;
-  const quickSummarizeVal = document.getElementById('quickSummarizeToggle')?.checked ?? false;
+function flushDirtySettings() {
+  saveTimer = null;
+  if (saveInFlight || dirtyKeys.size === 0) return;
 
-  // Collect custom URLs
-  const newCustomUrls = {};
-  ['chatgpt', 'gemini', 'claude', 'grok'].forEach(id => {
-    const val = document.getElementById(`url-${id}`).value.trim();
-    if (val) newCustomUrls[id] = val;
+  const keys = [...dirtyKeys];
+  dirtyKeys.clear();
+  const payload = buildSavePayload(keys);
+  saveInFlight = true;
+  chrome.storage.sync.set(payload, () => {
+    const error = chrome.runtime?.lastError;
+    saveInFlight = false;
+    if (error) {
+      keys.forEach((key) => dirtyKeys.add(key));
+      showSaveFeedback('Could not save settings. Try again.', true);
+    } else {
+      showSaveFeedback('✓ Settings saved');
+      if (!isExiting && dirtyKeys.size > 0) scheduleSave();
+    }
   });
+}
 
-  chrome.storage.sync.set({
-    customPrompts,
-    customUrls: newCustomUrls,
-    defaultProvider,
-    defaultPromptIndex,
-    lastProvider: defaultProvider,
-    lastPromptIndex: defaultPromptIndex,
-    openMode: selectedMode,
-    autoSubmit: autoSubmitVal,
-    includeUrl: includeUrlVal,
-    maxContentChars: maxCharsVal,
-    quickSummarize: quickSummarizeVal,
-  }, () => {
-    const feedback = document.getElementById('saveFeedback');
-    feedback.classList.add('visible');
-    setTimeout(() => feedback.classList.remove('visible'), 1500);
+function flushOnPageHide() {
+  isExiting = true;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (saveInFlight) {
+    flushExitDirtySettings();
+    return;
+  }
+  flushDirtySettings();
+}
+
+function flushExitDirtySettings() {
+  if (dirtyKeys.size === 0) return;
+  const keys = [...dirtyKeys];
+  dirtyKeys.clear();
+  const payload = buildSavePayload(keys);
+  chrome.storage.sync.set(payload, () => {
+    if (chrome.runtime?.lastError) {
+      keys.forEach((key) => dirtyKeys.add(key));
+      showSaveFeedback('Could not save settings. Try again.', true);
+    } else {
+      showSaveFeedback('✓ Settings saved');
+    }
   });
+}
+
+function resumeAfterPageShow() {
+  isExiting = false;
+  if (!saveInFlight && dirtyKeys.size > 0) scheduleSave();
+}
+
+function buildSavePayload(keys) {
+  const dirty = new Set(keys);
+  const payload = {};
+  if (dirty.has('customPrompts')) payload.customPrompts = customPrompts;
+  if (dirty.has('customUrls')) {
+    customUrls = collectCustomUrls();
+    payload.customUrls = customUrls;
+  }
+  if (dirty.has('defaultProvider')) payload.defaultProvider = defaultProvider;
+  if (dirty.has('lastProvider')) payload.lastProvider = defaultProvider;
+  if (dirty.has('defaultPromptIndex')) payload.defaultPromptIndex = defaultPromptIndex;
+  if (dirty.has('lastPromptIndex')) payload.lastPromptIndex = defaultPromptIndex;
+  if (dirty.has('openMode')) payload.openMode = openMode;
+  if (dirty.has('toolbarAction')) payload.toolbarAction = toolbarAction;
+  if (dirty.has('autoSubmit')) payload.autoSubmit = autoSubmit;
+  if (dirty.has('includeUrl')) payload.includeUrl = includeUrl;
+  if (dirty.has('maxContentChars')) payload.maxContentChars = maxContentChars;
+  return payload;
+}
+
+function collectCustomUrls() {
+  return Object.fromEntries(PROVIDERS.flatMap((provider) => {
+    const value = document.getElementById(`url-${provider}`).value.trim();
+    return value ? [[provider, value]] : [];
+  }));
+}
+
+function showSaveFeedback(message, isError = false) {
+  const feedback = document.getElementById('saveFeedback');
+  feedback.textContent = message;
+  feedback.classList.toggle('error', isError);
+  feedback.classList.add('visible');
+  clearTimeout(feedbackTimer);
+  if (!isError) {
+    feedbackTimer = setTimeout(() => feedback.classList.remove('visible'), 1500);
+  }
 }

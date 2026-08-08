@@ -1,15 +1,15 @@
-// Content script injected on chat.openai.com and chatgpt.com
-// ChatGPT uses a contenteditable div (#prompt-textarea)
+// Content script injected on chat.openai.com and chatgpt.com.
+// ChatGPT uses a contenteditable div (#prompt-textarea).
 
 (function () {
-  const PROVIDER_ID = 'chatgpt';
+  'use strict';
+
   const POLL_INTERVAL = 300;
   const MAX_POLLS = 50;
-  const PAYLOAD_TTL = 60000;
 
-  let polls = 0;
-  let injected = false;
-  let cachedPayload = null; // cache after first fetch — storage clears on first GET_PAYLOAD
+  function ensureCurrent(delivery) {
+    if (delivery && !delivery.isCurrent()) throw new Error('ChatGPT payload expired');
+  }
 
   function getInputEl() {
     return (
@@ -29,13 +29,10 @@
 
   function setContentEditableValue(el, text) {
     el.focus();
-
-    // ChatGPT's #prompt-textarea is a contenteditable div managed by React
-    // execCommand('insertText') triggers React's synthetic onInput handler correctly
     document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
-
-    // Dispatch events to ensure React updates its internal state
+    if (document.execCommand('insertText', false, text) === false) {
+      throw new Error('ChatGPT prompt insertion was rejected');
+    }
     el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
@@ -45,65 +42,44 @@
     }));
   }
 
-  async function tryInject() {
-    if (injected) return;
-    if (polls >= MAX_POLLS) return;
-    polls++;
-
-    if (!cachedPayload) {
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'GET_PAYLOAD' });
-        cachedPayload = response?.payload ?? null;
-      } catch (e) {
-        return;
+  async function waitForInputEl(delivery) {
+    for (let polls = 0; polls < MAX_POLLS; polls += 1) {
+      ensureCurrent(delivery);
+      const inputEl = getInputEl();
+      if (inputEl) return inputEl;
+      if (polls + 1 < MAX_POLLS) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
       }
     }
-    const payload = cachedPayload;
+    throw new Error('ChatGPT prompt editor is not available');
+  }
 
-    if (!payload) {
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
+  async function injectPayload(payload, delivery) {
+    if (!payload || typeof payload.text !== 'string') {
+      throw new TypeError('ChatGPT payload text must be a string');
     }
 
-    if (payload.provider !== PROVIDER_ID) return;
-    if (Date.now() - payload.createdAt > PAYLOAD_TTL) return;
-
-    const inputEl = getInputEl();
-    if (!inputEl) {
-      polls--;
-      setTimeout(tryInject, POLL_INTERVAL);
-      return;
-    }
-
-    injected = true;
+    const inputEl = await waitForInputEl(delivery);
+    ensureCurrent(delivery);
     setContentEditableValue(inputEl, payload.text);
 
-    // Only auto-submit if the setting is enabled
     if (payload.autoSubmit !== false) {
-      // Give React time to update state and enable the send button
-      await new Promise((r) => setTimeout(r, 700));
-
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      ensureCurrent(delivery);
       const submitEl = getSubmitEl();
       if (submitEl && !submitEl.disabled) {
         submitEl.click();
       } else {
-        // ChatGPT also submits on Enter (without Shift)
-        inputEl.dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key: 'Enter',
-            code: 'Enter',
-            bubbles: true,
-            cancelable: true,
-            shiftKey: false,
-          })
-        );
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          bubbles: true,
+          cancelable: true,
+          shiftKey: false,
+        }));
       }
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryInject);
-  } else {
-    tryInject();
-  }
+  globalThis.PageMindBridge.register('chatgpt', injectPayload);
 })();

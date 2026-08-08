@@ -23,10 +23,12 @@ PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube
   - **Gemini** (Google)
   - **Claude** (Anthropic)
   - **Grok** (xAI)
+- **📑 原生側邊面板** — 在 Chrome 原生 Side Panel 中使用 ChatGPT、Gemini、Claude 或 Grok。
+- **🪟 三種 AI 開啟位置** — 可選原生 Side Panel、並排 Companion Window 或新分頁。
+- **🖱️ 可設定工具列圖示** — 可選開啟 PageMind 選單、直接摘要或開關 Side Panel。
 - **🎬 YouTube 逐字稿提取** — 自動抓取影片字幕，讓 AI 幫你「看」影片。
 - **🧹 智慧清理內文** — 採用 Mozilla Readability.js，過濾廣告、選單等雜訊，只送出乾淨的正文。
 - **📝 自訂提示詞** — 儲存常用指令，如「用繁體中文條列三個重點」、「幫我找出行動項目」、「用 ELI5 方式解釋」。
-- **🪟 並排視窗模式** — AI 視窗自動開在旁邊，原本的頁面不會消失。
 - **📋 剪貼簿備份** — 內容同步複製到剪貼簿，想手動貼也沒問題。
 
 ## 📦 安裝方式
@@ -52,18 +54,21 @@ PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube
 ## 🎯 使用方式
 
 1. 瀏覽任何文章、新聞或 YouTube 影片
-2. 點擊工具列上的 **PageMind** 圖示
+2. 點擊工具列上的 **PageMind** 圖示（或點擊右鍵選單）
 3. 選擇你的 **AI 提供者**（ChatGPT、Gemini、Claude 或 Grok）
 4. 從下拉選單選擇提示詞，或點擊 ⚙ 新增自訂提示詞
 5. 點擊 **Summarize This Page**
-6. AI 視窗會自動在旁邊開啟，內容已自動送出，等待回應即可
+6. PageMind 會在你設定的 AI 開啟位置（Side Panel、並排視窗或新分頁）開啟 AI，內容自動送出，等待回應即可
+
+> 部分 AI 提供者的登入、驗證或 OAuth 可能無法在 iframe 中執行。請使用 **在新分頁開啟** 完成登入後，再重新載入 Side Panel。
 
 ## ⚙️ 設定
 
 點擊擴充功能介面的齒輪圖示 ⚙ 進入設定頁：
 
 - 🤖 設定**預設 AI 提供者**
-- 🪟 切換**視窗模式**（並排視窗 / 新分頁）
+- 🪟 切換 **AI 開啟位置**（原生 Side Panel / 並排視窗 / 新分頁）
+- 🖱️ 設定**工具列圖示點擊行為**（開啟 PageMind 選單 / 直接摘要 / 切換 Side Panel）
 - 📝 管理與排序你的**自訂提示詞**
 
 ## 🔐 權限說明
@@ -76,7 +81,9 @@ PageMind **不會收集任何資料**，所有內容只在你的瀏覽器本機�
 | `scripting` | 注入 Readability / YouTube 字幕提取器 |
 | `storage` | 儲存提示詞與設定（本機） |
 | `clipboardWrite` | 將內容備份至剪貼簿 |
-| `windows` / `tabs` | 開啟並管理 AI 並排視窗 |
+| `windows` / `tabs` | 開啟並管理 AI 視窗與分頁 |
+| `sidePanel` | 在 Chrome 原生 Side Panel 中顯示 PageMind 及選取的 AI 提供者 |
+| `declarativeNetRequestWithHostAccess` | 僅解除 PageMind 內嵌 AI 提供者子頁面的框架阻擋標頭 (X-Frame-Options / CSP) |
 
 ## 📄 授權
 

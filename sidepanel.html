@@ -5,300 +5,142 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PageMind</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f8f9fa;
+      min-width: 280px;
+      overflow: hidden;
+      font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: #1a1a2e;
-      min-height: 100vh;
+      background: #f8f9fa;
     }
-
+    button, select { font: inherit; }
+    .shell { display: flex; flex-direction: column; height: 100%; }
     .header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      color: #fff;
       background: linear-gradient(135deg, #4882f4, #7c6aee);
-      color: white;
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      position: sticky;
-      top: 0;
-      z-index: 10;
     }
-
-    .header h1 {
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: 0.3px;
-    }
-
-    .settings-btn {
-      background: none;
-      border: none;
-      color: rgba(255,255,255,0.85);
+    .header h1 { flex: 1; margin: 0; font-size: 14px; letter-spacing: .2px; }
+    .icon-btn {
+      display: inline-grid;
+      place-items: center;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 4px 7px;
+      border: 0;
+      border-radius: 6px;
+      color: inherit;
+      background: transparent;
       cursor: pointer;
-      font-size: 17px;
-      padding: 2px 5px;
-      border-radius: 4px;
-      line-height: 1;
-      transition: background 0.15s;
     }
-
-    .settings-btn:hover {
-      background: rgba(255,255,255,0.2);
-      color: white;
+    .icon-btn:hover, .icon-btn:focus-visible { background: rgba(255,255,255,.2); }
+    .controls {
+      flex: 0 0 auto;
+      padding: 9px 10px 8px;
+      border-bottom: 1px solid #ddd;
+      background: #fff;
     }
-
-    .content {
-      padding: 16px;
-    }
-
-    .section-label {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: #666;
-      margin-bottom: 8px;
-    }
-
-    /* Provider grid */
-    .provider-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 7px;
-      margin-bottom: 14px;
-    }
-
+    .controls.collapsed .control-details { display: none; }
+    .provider-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
     .provider-btn {
-      padding: 10px 8px;
-      border-radius: 8px;
-      border: 2px solid #e0e0e0;
-      background: white;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
+      overflow: hidden;
+      padding: 6px 3px;
+      border: 1px solid #ddd;
+      border-radius: 7px;
       color: #444;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      justify-content: center;
+      background: #fff;
+      cursor: pointer;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-
-    .provider-btn:hover {
-      border-color: #aaa;
-      background: #f5f5f5;
-    }
-
+    .provider-btn:hover { background: #f5f5f5; }
     .provider-btn.selected {
       border-color: var(--provider-color, #4882f4);
-      background: var(--provider-bg, #eef3ff);
       color: var(--provider-color, #4882f4);
+      background: var(--provider-bg, #eef3ff);
+      box-shadow: inset 0 0 0 1px currentColor;
     }
-
-    .provider-dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: currentColor;
-      flex-shrink: 0;
-    }
-
-    /* Prompt selector */
-    .prompt-section {
-      margin-bottom: 16px;
-    }
-
-    .prompt-select {
-      width: 100%;
-      padding: 9px 10px;
-      border: 1.5px solid #e0e0e0;
-      border-radius: 8px;
-      background: white;
-      font-size: 13px;
-      color: #333;
-      cursor: pointer;
-      outline: none;
-      transition: border-color 0.15s;
-      appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      padding-right: 28px;
-    }
-
-    .prompt-select:focus {
-      border-color: #4882f4;
-    }
-
-    /* Action area */
-    .action-area {
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-    }
-
-    .summarize-btn {
-      width: 100%;
-      padding: 11px;
-      background: linear-gradient(135deg, #4882f4, #7c6aee);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.15s, transform 0.1s;
-      letter-spacing: 0.2px;
-    }
-
-    .summarize-btn:hover:not(:disabled) {
-      opacity: 0.9;
-      transform: translateY(-1px);
-    }
-
-    .summarize-btn:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
-    .summarize-btn:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-
-    /* Status messages */
-    .status {
-      font-size: 12px;
-      text-align: center;
-      padding: 6px 10px;
-      border-radius: 6px;
+    .provider-dot { display: inline-block; width: 7px; height: 7px; margin-right: 3px; border-radius: 50%; background: currentColor; }
+    .control-details { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin-top: 7px; }
+    .prompt-select { min-width: 0; padding: 7px 8px; border: 1px solid #ddd; border-radius: 7px; background: #fff; }
+    .summarize-btn { padding: 7px 10px; border: 0; border-radius: 7px; color: #fff; font-weight: 600; background: linear-gradient(135deg, #4882f4, #7c6aee); cursor: pointer; }
+    .summarize-btn:disabled { opacity: .55; cursor: wait; }
+    .page-info { grid-column: 1 / -1; min-width: 0; }
+    .page-title, .page-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .page-title { color: #555; font-size: 11px; }
+    .page-url { color: #888; font-size: 10px; }
+    .status { display: none; grid-column: 1 / -1; padding: 5px 7px; border-radius: 5px; text-align: center; font-size: 11px; }
+    .status.visible { display: block; }
+    .status.loading { color: #856404; background: #fff3cd; }
+    .status.success { color: #0a3622; background: #d1e7dd; }
+    .status.error { color: #842029; background: #f8d7da; }
+    .clipboard-hint { display: none; grid-column: 1 / -1; color: #777; text-align: center; font-size: 10px; }
+    .clipboard-hint.visible { display: block; }
+    .frame-area { position: relative; flex: 1 1 auto; min-height: 0; background: #fff; }
+    .provider-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+    .fallback {
+      position: absolute;
+      inset: 0;
       display: none;
-    }
-
-    .status.visible {
-      display: block;
-    }
-
-    .status.loading {
-      background: #fff3cd;
-      color: #856404;
-    }
-
-    .status.success {
-      background: #d1e7dd;
-      color: #0a3622;
-    }
-
-    .status.error {
-      background: #f8d7da;
-      color: #842029;
-    }
-
-    /* Clipboard hint */
-    .clipboard-hint {
-      font-size: 11px;
-      color: #888;
+      place-content: center;
+      gap: 10px;
+      padding: 28px;
       text-align: center;
-      display: none;
-    }
-
-    .clipboard-hint.visible {
-      display: block;
-    }
-
-    .divider {
-      height: 1px;
-      background: #eee;
-      margin: 2px 0 14px;
-    }
-
-    /* Page info section */
-    .page-info {
-      margin-top: 18px;
-      padding-top: 14px;
-      border-top: 1px solid #eee;
-    }
-
-    .page-title {
-      font-size: 12px;
       color: #555;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      background: #f8f9fa;
     }
-
-    .page-url {
-      font-size: 10.5px;
-      color: #999;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-top: 3px;
-    }
+    .fallback.visible { display: grid; }
+    .fallback-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
+    .fallback button { padding: 7px 10px; border: 1px solid #bbb; border-radius: 7px; background: #fff; cursor: pointer; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>✨ PageMind</h1>
-    <button class="settings-btn" id="settingsBtn" title="Settings">⚙</button>
-  </div>
+  <main class="shell">
+    <header class="header">
+      <h1>✨ PageMind</h1>
+      <button class="icon-btn" id="collapseBtn" type="button" title="Collapse controls" aria-label="Collapse controls" aria-expanded="true" aria-controls="panelControls">⌃</button>
+      <button class="icon-btn" id="reloadBtn" type="button" title="Reload provider" aria-label="Reload provider">↻</button>
+      <button class="icon-btn" id="openTabBtn" type="button" title="Open provider in a new tab" aria-label="Open provider in a new tab">↗</button>
+      <button class="icon-btn" id="settingsBtn" type="button" title="Settings" aria-label="Settings">⚙</button>
+    </header>
 
-  <div class="content">
-    <!-- Provider Selection -->
-    <div class="section-label">AI Provider</div>
-    <div class="provider-grid" id="providerGrid">
-      <button class="provider-btn" data-provider="chatgpt"
-        style="--provider-color:#10a37f; --provider-bg:#e8f7f2">
-        <span class="provider-dot"></span>ChatGPT
-      </button>
-      <button class="provider-btn" data-provider="gemini"
-        style="--provider-color:#4285f4; --provider-bg:#e8f0fe">
-        <span class="provider-dot"></span>Gemini
-      </button>
-      <button class="provider-btn" data-provider="claude"
-        style="--provider-color:#d97757; --provider-bg:#fdf0ea">
-        <span class="provider-dot"></span>Claude
-      </button>
-      <button class="provider-btn" data-provider="grok"
-        style="--provider-color:#1d9bf0; --provider-bg:#e8f4fd">
-        <span class="provider-dot"></span>Grok
-      </button>
-    </div>
-
-    <div class="divider"></div>
-
-    <!-- Prompt Selection -->
-    <div class="prompt-section">
-      <div class="section-label">Prompt</div>
-      <select class="prompt-select" id="promptSelect">
-        <!-- Options populated by sidepanel.js -->
-      </select>
-    </div>
-
-    <!-- Action -->
-    <div class="action-area">
-      <button class="summarize-btn" id="summarizeBtn">
-        Summarize This Page
-      </button>
-      <div class="status" id="statusMsg"></div>
-      <div class="clipboard-hint" id="clipboardHint">
-        💡 Content also copied to clipboard
+    <section class="controls" id="panelControls" aria-label="Summary controls">
+      <div class="provider-grid" id="providerGrid" role="group" aria-label="AI provider">
+        <button class="provider-btn" type="button" data-provider="chatgpt" aria-pressed="false" style="--provider-color:#10a37f;--provider-bg:#e8f7f2"><span class="provider-dot"></span>ChatGPT</button>
+        <button class="provider-btn" type="button" data-provider="gemini" aria-pressed="false" style="--provider-color:#4285f4;--provider-bg:#e8f0fe"><span class="provider-dot"></span>Gemini</button>
+        <button class="provider-btn" type="button" data-provider="claude" aria-pressed="false" style="--provider-color:#d97757;--provider-bg:#fdf0ea"><span class="provider-dot"></span>Claude</button>
+        <button class="provider-btn" type="button" data-provider="grok" aria-pressed="false" style="--provider-color:#1d9bf0;--provider-bg:#e8f4fd"><span class="provider-dot"></span>Grok</button>
       </div>
-    </div>
+      <div class="control-details">
+        <label class="sr-only" for="promptSelect">Summary prompt</label>
+        <select class="prompt-select" id="promptSelect" title="Summary prompt"></select>
+        <button class="summarize-btn" id="summarizeBtn" type="button">Summarize</button>
+        <div class="page-info" aria-label="Current page">
+          <div class="page-title" id="pageTitle">—</div>
+          <div class="page-url" id="pageUrl">—</div>
+        </div>
+        <div class="status" id="statusMsg" role="status" aria-live="polite"></div>
+        <div class="clipboard-hint" id="clipboardHint">Content also copied to clipboard</div>
+      </div>
+    </section>
 
-    <!-- Current page info -->
-    <div class="page-info">
-      <div class="section-label">Current Page</div>
-      <div class="page-title" id="pageTitle">—</div>
-      <div class="page-url" id="pageUrl">—</div>
-    </div>
-  </div>
-
+    <section class="frame-area" aria-label="Provider workspace">
+      <iframe class="provider-frame" id="providerFrame" title="AI provider"></iframe>
+      <div class="fallback" id="frameFallback" role="alert" aria-live="assertive">
+        <p id="fallbackMessage">The provider did not finish loading.</p>
+        <div class="fallback-actions">
+          <button id="retryFrameBtn" type="button">Try again</button>
+          <button id="fallbackNewTabBtn" type="button">Open in new tab</button>
+        </div>
+      </div>
+    </section>
+  </main>
   <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

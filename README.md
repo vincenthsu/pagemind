@@ -23,10 +23,12 @@ PageMind is a Chrome extension that **extracts the core content** of any webpage
   - **Gemini** (Google)
   - **Claude** (Anthropic)
   - **Grok** (xAI)
+- **📑 Native Side Panel** — Use ChatGPT, Gemini, Claude, or Grok beside the current page in Chrome's native Side Panel.
+- **🪟 Three Provider Destinations** — Send summaries to the Side Panel, a side-by-side Companion Window, or a New Tab.
+- **🖱️ Configurable Toolbar Icon** — Open the PageMind menu, summarize directly, or toggle the Side Panel.
 - **🎬 YouTube Transcript Extraction** — Automatically pulls video transcripts so AI can "watch" the video for you.
 - **🧹 Smart Content Cleaning** — Powered by Mozilla's Readability.js to strip ads, navbars, and clutter — only the good stuff gets sent.
 - **📝 Custom Prompts** — Save your go-to instructions like "Summarize in 3 bullet points", "Extract action items", or "Explain like I'm 5".
-- **🪟 Companion Window Mode** — AI opens side-by-side so you never lose your place on the original page.
 - **📋 Clipboard Fallback** — Content is also copied to your clipboard as a backup, just in case.
 
 ## 📦 Installation
@@ -52,18 +54,21 @@ The extension can be installed by loading it as an unpacked extension in Chrome:
 ## 🎯 Usage
 
 1. Navigate to any article, webpage, or YouTube video
-2. Click the **PageMind** icon in your Chrome toolbar
+2. Click the **PageMind** icon in your Chrome toolbar (or right-click for options)
 3. Select your preferred **AI Provider**
 4. Pick a prompt from the dropdown, or configure your own via Settings (⚙)
 5. Click **Summarize This Page**
-6. A companion window opens with your AI — content is injected and submitted automatically
+6. PageMind opens your selected AI Provider Window (Side Panel, Companion Window, or New Tab) — content is injected and submitted automatically
+
+> Provider sign-in, verification, or OAuth may refuse to run inside an iframe. Use **Open in New Tab**, finish sign-in, then reload the Side Panel.
 
 ## ⚙️ Settings
 
 Click the gear icon ⚙ in the extension popup to:
 
 - 🤖 Set your **default AI provider**
-- 🪟 Choose **window mode** — Companion Window (side-by-side) or New Tab
+- 🪟 Choose **AI Provider Window** — Chrome Side Panel, Companion Window (side-by-side), or New Tab
+- 🖱️ Choose **Toolbar Icon Action** — Open PageMind Menu, Summarize Directly, or Toggle Side Panel
 - 📝 Add, edit, and reorder your **custom prompts**
 
 ## 🔐 Permissions & Privacy
@@ -76,7 +81,9 @@ PageMind **does not collect or transmit any of your data**. All content is proce
 | `scripting` | Inject the Readability / YouTube transcript extractor |
 | `storage` | Save your prompts and preferences locally |
 | `clipboardWrite` | Copy extracted content to clipboard as a fallback |
-| `windows` / `tabs` | Open and manage the AI companion window |
+| `windows` / `tabs` | Open and manage AI windows and tabs |
+| `sidePanel` | Display PageMind and the selected AI provider in Chrome's native Side Panel |
+| `declarativeNetRequestWithHostAccess` | Remove frame-blocking headers only for AI provider subframes embedded by PageMind |
 
 ## 📄 License
 
