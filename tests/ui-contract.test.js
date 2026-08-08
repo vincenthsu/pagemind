@@ -433,3 +433,32 @@ test('pagehide dispatches later dirty values while a normal save is in flight', 
     harness.restore();
   }
 });
+
+test('pageshow restores normal saving after a pagehide with an in-flight save', async () => {
+  const harness = await bootOptions({ holdSaves: true });
+  try {
+    await harness.start();
+    const autoSubmit = harness.document.getElementById('autoSubmitToggle');
+    autoSubmit.checked = false;
+    await autoSubmit.dispatch('change');
+    await harness.window.dispatch('pagehide');
+    assert.deepEqual(harness.calls, [{ autoSubmit: false }]);
+
+    await harness.window.dispatch('pageshow');
+    const includeUrl = harness.document.getElementById('includeUrlToggle');
+    includeUrl.checked = false;
+    await includeUrl.dispatch('change');
+    await waitForSave();
+    assert.equal(harness.calls.length, 1);
+
+    harness.resolveSave();
+    await waitForSave();
+    assert.deepEqual(harness.calls, [
+      { autoSubmit: false },
+      { includeUrl: false },
+    ]);
+    harness.resolveSave();
+  } finally {
+    harness.restore();
+  }
+});

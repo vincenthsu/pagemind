@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   registerEventListeners();
   window.addEventListener('pagehide', flushOnPageHide);
+  window.addEventListener('pageshow', resumeAfterPageShow);
 });
 
 function registerEventListeners() {
@@ -340,6 +341,11 @@ function flushExitDirtySettings() {
       showSaveFeedback('✓ Settings saved');
     }
   });
+}
+
+function resumeAfterPageShow() {
+  isExiting = false;
+  if (!saveInFlight && dirtyKeys.size > 0) scheduleSave();
 }
 
 function buildSavePayload(keys) {
