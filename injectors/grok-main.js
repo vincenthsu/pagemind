@@ -8,6 +8,7 @@
   const RESULT_EVENT = '__PAGE_MIND_GROK_RESULT__';
   const POLL_INTERVAL = 400;
   const MAX_POLLS = 50;
+  const MAX_COMPLETED_REQUEST_IDS = 256;
   const inFlightRequestIds = new Set();
   const deliveredRequestIds = new Set();
 
@@ -55,7 +56,9 @@
 
     el.focus();
     document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
+    if (document.execCommand('insertText', false, text) === false) {
+      throw new Error('Grok prompt insertion was rejected');
+    }
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
       cancelable: true,
@@ -70,8 +73,23 @@
     }));
   }
 
-  async function findInputEl() {
+  function rememberCompleted(requestId) {
+    deliveredRequestIds.add(requestId);
+    if (deliveredRequestIds.size > MAX_COMPLETED_REQUEST_IDS) {
+      const oldestRequestId = deliveredRequestIds.values().next().value;
+      deliveredRequestIds.delete(oldestRequestId);
+    }
+  }
+
+  function ensureNotExpired(expiresAt) {
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      throw new Error('Grok payload expired');
+    }
+  }
+
+  async function findInputEl(expiresAt) {
     for (let polls = 0; polls < MAX_POLLS; polls += 1) {
+      ensureNotExpired(expiresAt);
       const inputEl = getInputEl();
       if (inputEl) return inputEl;
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
@@ -80,13 +98,15 @@
   }
 
   async function injectRequest(detail) {
-    const { requestId, text, autoSubmit } = detail;
+    const { requestId, text, autoSubmit, expiresAt } = detail;
     try {
-      const inputEl = await findInputEl();
+      const inputEl = await findInputEl(expiresAt);
+      ensureNotExpired(expiresAt);
       setInputValue(inputEl, text);
 
       if (autoSubmit) {
         await new Promise((resolve) => setTimeout(resolve, 800));
+        ensureNotExpired(expiresAt);
         const submitEl = getSubmitEl();
         if (submitEl && !submitEl.disabled) {
           submitEl.click();
@@ -100,7 +120,7 @@
         }
       }
 
-      deliveredRequestIds.add(requestId);
+      rememberCompleted(requestId);
       reportResult(requestId, true);
     } catch (error) {
       console.error('PageMind Grok MAIN-world injection failed', error);
@@ -114,11 +134,12 @@
     const detail = event.detail;
     if (
       event.target !== document
-      || !hasExactKeys(detail, ['autoSubmit', 'requestId', 'text'])
+      || !hasExactKeys(detail, ['autoSubmit', 'expiresAt', 'requestId', 'text'])
       || typeof detail.requestId !== 'string'
       || detail.requestId.length === 0
       || typeof detail.text !== 'string'
       || typeof detail.autoSubmit !== 'boolean'
+      || !Number.isFinite(detail.expiresAt)
     ) return;
 
     if (deliveredRequestIds.has(detail.requestId)) {

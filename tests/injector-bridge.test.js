@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const BRIDGE_URL = new URL('../injectors/bridge.js', import.meta.url);
 const EXTENSION_ORIGIN = 'chrome-extension://pagemind';
+const NOW = 100_000;
 const INJECTOR_URLS = Object.freeze({
   chatgpt: new URL('../injectors/chatgpt.js', import.meta.url),
   gemini: new URL('../injectors/gemini.js', import.meta.url),
@@ -17,6 +18,7 @@ async function createHarness({
   readyState = 'complete',
   runtimeAvailable = true,
   responses = [],
+  now = NOW,
 } = {}) {
   const source = await readFile(BRIDGE_URL, 'utf8');
   const windowListeners = new Map();
@@ -29,6 +31,7 @@ async function createHarness({
   const parent = frame === 'nested' ? {} : top;
   const window = frame === 'top' ? top : {};
   const document = { readyState };
+  let currentNow = now;
 
   window.top = top;
   window.parent = frame === 'top' ? window : parent;
@@ -64,6 +67,7 @@ async function createHarness({
   const context = {
     console: { error: (...args) => errors.push(args) },
     document,
+    Date: { now: () => currentNow },
     setTimeout(callback, delay) {
       timers.push({ callback, delay });
       return timers.length;
@@ -87,12 +91,22 @@ async function createHarness({
     parent,
     parentMessages,
     runtimeMessages,
+    now: () => currentNow,
+    setNow(value) { currentNow = value; },
     timers,
     windowListeners,
   };
 }
 
-async function createProviderHarness(provider, { inputAvailable = true } = {}) {
+async function createProviderHarness(provider, {
+  execCommandResult = true,
+  forgeGrokResult = false,
+  inputAvailable = true,
+  loadGrokMain = true,
+  now = NOW,
+  submitAvailable = true,
+  submitDisabled = false,
+} = {}) {
   const sources = await Promise.all([
     readFile(BRIDGE_URL, 'utf8'),
     readFile(INJECTOR_URLS[provider], 'utf8'),
@@ -106,6 +120,8 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
   const timers = [];
   const errors = [];
   const selectorResults = new Map();
+  let currentNow = now;
+  let uuidCounter = 0;
 
   function addEventTarget(target) {
     const listeners = new Map();
@@ -188,6 +204,7 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
     grok: createElement('TEXTAREA'),
   };
   const submit = createElement('BUTTON');
+  submit.disabled = submitDisabled;
   const primarySelectors = {
     chatgpt: '#prompt-textarea',
     gemini: '.ql-editor[contenteditable="true"]',
@@ -201,14 +218,14 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
     grok: 'button[aria-label="Send"]',
   };
   if (inputAvailable) selectorResults.set(primarySelectors[provider], inputs[provider]);
-  selectorResults.set(submitSelectors[provider], submit);
+  if (submitAvailable) selectorResults.set(submitSelectors[provider], submit);
   document.querySelector = (selector) => selectorResults.get(selector) ?? null;
   document.execCommand = (command, _showUi, argument) => {
     if (command === 'insertText' && document.activeElement) {
       if (document.activeElement.tagName === 'TEXTAREA') document.activeElement.value = argument;
       else document.activeElement.textContent = argument;
     }
-    return true;
+    return execCommandResult;
   };
   document.createRange = () => ({ selectNodeContents() {} });
 
@@ -231,7 +248,8 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
       log() {},
     },
     CustomEvent: FakeCustomEvent,
-    crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' },
+    crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, '0')}` },
+    Date: { now: () => currentNow },
     document,
     Event: FakeEvent,
     InputEvent: FakeEvent,
@@ -247,14 +265,22 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
   context.globalThis = context;
 
   vm.runInNewContext(sources[0], context, { filename: 'injectors/bridge.js' });
-  if (provider === 'grok') {
+  function installGrokMain() {
     vm.runInNewContext(sources[2], context, { filename: 'injectors/grok-main.js' });
+  }
+  if (provider === 'grok' && loadGrokMain) installGrokMain();
+  if (provider === 'grok' && forgeGrokResult) {
+    document.addEventListener('__PAGE_MIND_GROK_DELIVER__', (event) => {
+      document.dispatchEvent(new FakeCustomEvent('__PAGE_MIND_GROK_RESULT__', {
+        detail: { requestId: event.detail.requestId, ok: true },
+      }));
+    });
   }
   vm.runInNewContext(sources[1], context, { filename: `injectors/${provider}.js` });
 
   return {
     deliver(overrides = {}) {
-      window.dispatchEvent({
+      const event = {
         type: 'message',
         source: parent,
         origin: EXTENSION_ORIGIN,
@@ -263,16 +289,30 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
           provider,
           windowId: 31,
           payloadId: `${provider}-payload`,
-          payload: { provider, text: `Prompt for ${provider}`, autoSubmit: false },
+          payload: {
+            provider, text: `Prompt for ${provider}`, autoSubmit: false, createdAt: currentNow,
+          },
         },
         ...overrides,
-      });
+      };
+      if (
+        event.data?.payload
+        && typeof event.data.payload === 'object'
+        && event.data.payload.createdAt === undefined
+      ) {
+        event.data = { ...event.data, payload: { ...event.data.payload, createdAt: currentNow } };
+      }
+      window.dispatchEvent(event);
+    },
+    dispatchGrokRequest(detail) {
+      document.dispatchEvent(new FakeCustomEvent('__PAGE_MIND_GROK_DELIVER__', { detail }));
     },
     document,
     documentEvents,
     errors,
     input: inputs[provider],
     installInput() { selectorResults.set(primarySelectors[provider], inputs[provider]); },
+    installGrokMain,
     parent,
     parentMessages,
     runTimer(delay) {
@@ -281,6 +321,7 @@ async function createProviderHarness(provider, { inputAvailable = true } = {}) {
       timer.cleared = true;
       timer.callback();
     },
+    setNow(value) { currentNow = value; },
     submit,
     timers,
     window,
@@ -302,10 +343,17 @@ function deliver(harness, overrides = {}) {
       provider: 'claude',
       windowId: 7,
       payloadId: 'panel-1',
-      payload: { text: 'Explain this' },
+      payload: { text: 'Explain this', createdAt: harness.now() },
     },
     ...overrides,
   };
+  if (
+    event.data?.payload
+    && typeof event.data.payload === 'object'
+    && event.data.payload.createdAt === undefined
+  ) {
+    event.data = { ...event.data, payload: { ...event.data.payload, createdAt: harness.now() } };
+  }
   for (const listener of harness.windowListeners.get('message') ?? []) listener(event);
 }
 
@@ -327,7 +375,7 @@ test('publishes the bridge before runtime APIs are available and retries after 4
 });
 
 test('top-level registration requests and delivers an explicitly identified runtime payload', async () => {
-  const payload = { id: 'tab-1', text: 'Summarize this' };
+  const payload = { id: 'tab-1', text: 'Summarize this', createdAt: NOW };
   const harness = await createHarness({ responses: [{ payload }] });
   const delivered = [];
 
@@ -337,12 +385,12 @@ test('top-level registration requests and delivers an explicitly identified runt
   assert.deepEqual(structuredClone(harness.runtimeMessages), [{
     type: 'GET_PAYLOAD', provider: 'chatgpt', context: 'tab',
   }]);
-  assert.deepEqual(delivered, [payload]);
+  assert.deepEqual(delivered, [{ ...payload, createdAt: NOW }]);
   assert.equal(Object.isFrozen(harness.bridge), true);
 });
 
 test('runtime delivery rejects malformed IDs and payloads and retries every 400ms', async () => {
-  const payload = { id: 'tab-valid', text: 'Valid' };
+  const payload = { id: 'tab-valid', text: 'Valid', createdAt: NOW };
   const harness = await createHarness({ responses: [
     { payload: { id: 42 } },
     { payload: null },
@@ -360,7 +408,7 @@ test('runtime delivery rejects malformed IDs and payloads and retries every 400m
   harness.timers[2].callback();
   await Promise.resolve();
 
-  assert.deepEqual(delivered, [payload]);
+  assert.deepEqual(delivered, [{ ...payload, createdAt: NOW }]);
   assert.equal(harness.runtimeMessages.length, 4);
 });
 
@@ -390,7 +438,7 @@ test('trusted PAGE_MIND_DELIVER supplies the panel payload directly', async () =
   } });
   await new Promise(setImmediate);
 
-  assert.deepEqual(delivered, [payload]);
+  assert.deepEqual(delivered, [{ ...payload, createdAt: NOW }]);
   assert.deepEqual(harness.runtimeMessages, []);
   assert.deepEqual(structuredClone(harness.parentMessages.at(-1)), {
     data: {
@@ -426,7 +474,7 @@ test('failed panel delivery is not acknowledged and the same payloadId can retry
   });
 });
 
-test('concurrent panel duplicate runs and acknowledges exactly once', async () => {
+test('concurrent duplicate runs once and a completed replay re-emits its ACK', async () => {
   const harness = await createHarness({ frame: 'direct' });
   let deliveries = 0;
   let resolveHandler;
@@ -448,11 +496,33 @@ test('concurrent panel duplicate runs and acknowledges exactly once', async () =
   assert.equal(deliveries, 1);
   assert.equal(harness.parentMessages.filter(({ data }) => (
     data.type === 'PAGE_MIND_DELIVERED'
-  )).length, 1);
+  )).length, 2);
+});
+
+test('completed payload cache evicts its oldest ID after 256 deliveries', async () => {
+  const harness = await createHarness({ frame: 'direct' });
+  let deliveries = 0;
+  harness.bridge.register('claude', async () => { deliveries += 1; });
+
+  for (let index = 0; index <= 256; index += 1) {
+    deliver(harness, { data: {
+      type: 'PAGE_MIND_DELIVER', provider: 'claude', windowId: 7,
+      payloadId: `bounded-${index}`,
+      payload: { text: String(index), createdAt: NOW },
+    } });
+    await new Promise(setImmediate);
+  }
+  deliver(harness, { data: {
+    type: 'PAGE_MIND_DELIVER', provider: 'claude', windowId: 7,
+    payloadId: 'bounded-0', payload: { text: 'reintroduced', createdAt: NOW },
+  } });
+  await new Promise(setImmediate);
+
+  assert.equal(deliveries, 258);
 });
 
 test('top-level delivery never posts PAGE_MIND_DELIVERED', async () => {
-  const payload = { id: 'tab-ack-boundary', text: 'Top level' };
+  const payload = { id: 'tab-ack-boundary', text: 'Top level', createdAt: NOW };
   const harness = await createHarness({ responses: [{ payload }] });
 
   harness.bridge.register('chatgpt', async () => {});
@@ -462,7 +532,7 @@ test('top-level delivery never posts PAGE_MIND_DELIVERED', async () => {
 });
 
 test('top-level handler failure retries the fetched payload without another GET_PAYLOAD', async () => {
-  const payload = { id: 'tab-retry', text: 'Retry top-level editor' };
+  const payload = { id: 'tab-retry', text: 'Retry top-level editor', createdAt: NOW };
   const harness = await createHarness({ responses: [{ payload }] });
   let attempts = 0;
   harness.bridge.register('chatgpt', async () => {
@@ -481,6 +551,38 @@ test('top-level handler failure retries the fetched payload without another GET_
   assert.equal(attempts, 2);
   assert.equal(harness.runtimeMessages.length, 1);
   assert.deepEqual(harness.parentMessages, []);
+});
+
+test('expired top-level payload never reaches its handler', async () => {
+  const payload = { id: 'tab-expired', text: 'Too late', createdAt: NOW - 60_001 };
+  const harness = await createHarness({ responses: [{ payload }] });
+  let deliveries = 0;
+
+  harness.bridge.register('chatgpt', async () => { deliveries += 1; });
+  await new Promise(setImmediate);
+
+  assert.equal(deliveries, 0);
+  assert.equal(harness.timers.length, 0);
+  assert.deepEqual(harness.parentMessages, []);
+});
+
+test('top-level transient retry stops when the absolute payload deadline passes', async () => {
+  const payload = { id: 'tab-deadline', text: 'Deadline', createdAt: NOW };
+  const harness = await createHarness({ responses: [{ payload }] });
+  let attempts = 0;
+  harness.bridge.register('chatgpt', async () => {
+    attempts += 1;
+    throw new Error('transient');
+  });
+  await new Promise(setImmediate);
+  assert.equal(harness.timers.length, 1);
+
+  harness.setNow(NOW + 60_001);
+  harness.timers[0].callback();
+  await new Promise(setImmediate);
+
+  assert.equal(attempts, 1);
+  assert.equal(harness.timers.length, 1);
 });
 
 test('panel delivery ignores untrusted and malformed messages', async () => {
@@ -570,7 +672,7 @@ test('stale registration DOM work and messages cannot reach the active handler',
     origin: EXTENSION_ORIGIN,
   }]);
   assert.deepEqual(oldDeliveries, []);
-  assert.deepEqual(newDeliveries, [{ text: 'New' }]);
+  assert.deepEqual(newDeliveries, [{ text: 'New', createdAt: NOW }]);
 });
 
 test('stale runtime retry attempts cannot announce an old registration', async () => {
@@ -611,7 +713,7 @@ test('a retained stale listener cannot deliver into a newer same-provider regist
   await Promise.resolve();
 
   assert.deepEqual(oldDeliveries, []);
-  assert.deepEqual(newDeliveries, [{ text: 'Current' }]);
+  assert.deepEqual(newDeliveries, [{ text: 'Current', createdAt: NOW }]);
 });
 
 test('handler failures are caught and logged once', async () => {
@@ -644,7 +746,7 @@ test('register validates its provider and handler', async () => {
 });
 
 for (const provider of ['chatgpt', 'gemini', 'claude', 'grok']) {
-  test(`${provider} actual injector completes panel delivery through the bridge`, async () => {
+  test(`${provider} provider wiring completes panel delivery through the bridge`, async () => {
     const harness = await createProviderHarness(provider);
 
     assert.deepEqual(structuredClone(harness.parentMessages), [{
@@ -683,7 +785,7 @@ for (const [provider, delay] of [
   ['claude', 700],
   ['grok', 800],
 ]) {
-  test(`${provider} actual injector preserves delayed auto-submit`, async () => {
+  test(`${provider} provider wiring preserves delayed auto-submit`, async () => {
     const harness = await createProviderHarness(provider);
     harness.deliver({ data: {
       type: 'PAGE_MIND_DELIVER', provider, windowId: 31,
@@ -708,7 +810,7 @@ for (const [provider, pollDelay] of [
   ['gemini', 400],
   ['claude', 300],
 ]) {
-  test(`${provider} actual injector waits for a delayed editor mount`, async () => {
+  test(`${provider} provider wiring waits for a delayed editor mount`, async () => {
     const harness = await createProviderHarness(provider, { inputAvailable: false });
 
     harness.deliver();
@@ -726,7 +828,52 @@ for (const [provider, pollDelay] of [
   });
 }
 
-test('actual injector rejection is unacknowledged and the same payloadId retries', async () => {
+test('provider wait stops at absolute expiry without injecting or acknowledging', async () => {
+  const harness = await createProviderHarness('gemini', { inputAvailable: false });
+
+  harness.deliver();
+  await Promise.resolve();
+  harness.setNow(NOW + 60_001);
+  harness.installInput();
+  harness.runTimer(400);
+  await settleEvents();
+
+  assert.equal(harness.input.textContent, '');
+  assert.equal(harness.parentMessages.length, 1);
+});
+
+test('false execCommand result rejects injection without an ACK', async () => {
+  const harness = await createProviderHarness('claude', { execCommandResult: false });
+
+  harness.deliver();
+  await settleEvents();
+
+  assert.equal(harness.parentMessages.length, 1);
+});
+
+for (const submitMode of ['missing', 'disabled']) {
+  test(`${submitMode} submit button uses the keyboard fallback and still ACKs`, async () => {
+    const harness = await createProviderHarness('chatgpt', {
+      submitAvailable: submitMode !== 'missing',
+      submitDisabled: submitMode === 'disabled',
+    });
+    harness.deliver({ data: {
+      type: 'PAGE_MIND_DELIVER', provider: 'chatgpt', windowId: 31,
+      payloadId: `chatgpt-${submitMode}`,
+      payload: { provider: 'chatgpt', text: 'Fallback', autoSubmit: true, createdAt: NOW },
+    } });
+    await Promise.resolve();
+    harness.runTimer(700);
+    await settleEvents();
+
+    assert.equal(harness.input.events.some(({ type }) => type === 'keydown'), true);
+    assert.equal(harness.parentMessages.filter(({ data }) => (
+      data.type === 'PAGE_MIND_DELIVERED'
+    )).length, 1);
+  });
+}
+
+test('provider wiring rejection is unacknowledged and the same payloadId retries', async () => {
   const harness = await createProviderHarness('chatgpt');
 
   harness.deliver({ data: {
@@ -746,7 +893,7 @@ test('actual injector rejection is unacknowledged and the same payloadId retries
   )).length, 1);
 });
 
-test('actual injector rejects malformed and untrusted panel deliveries', async () => {
+test('provider wiring rejects malformed and untrusted panel deliveries', async () => {
   const harness = await createProviderHarness('gemini');
   const validData = {
     type: 'PAGE_MIND_DELIVER', provider: 'gemini', windowId: 31,
@@ -772,7 +919,11 @@ test('Grok uses an exact document-local request/result contract without window m
   const protocolEvents = harness.documentEvents.filter(({ type }) => type.startsWith('__PAGE_MIND_GROK_'));
   assert.equal(protocolEvents.length, 2);
   assert.equal(protocolEvents[0].type, '__PAGE_MIND_GROK_DELIVER__');
-  assert.deepEqual(Object.keys(protocolEvents[0].detail).sort(), ['autoSubmit', 'requestId', 'text']);
+  assert.deepEqual(
+    Object.keys(protocolEvents[0].detail).sort(),
+    ['autoSubmit', 'expiresAt', 'requestId', 'text'],
+  );
+  assert.equal(protocolEvents[0].detail.expiresAt, NOW + 60_000);
   assert.equal(protocolEvents[0].detail.text, 'Prompt for grok');
   assert.equal(protocolEvents[1].type, '__PAGE_MIND_GROK_RESULT__');
   assert.deepEqual(Object.keys(protocolEvents[1].detail).sort(), ['ok', 'requestId']);
@@ -780,4 +931,64 @@ test('Grok uses an exact document-local request/result contract without window m
   assert.equal(protocolEvents[1].detail.ok, true);
   assert.equal(harness.timers.some(({ delay }) => delay === 30000), true);
   assert.deepEqual(harness.windowMessages, []);
+});
+
+test('forged Grok success without editor mutation cannot trigger an ACK', async () => {
+  const harness = await createProviderHarness('grok', {
+    forgeGrokResult: true,
+    loadGrokMain: false,
+  });
+
+  harness.deliver();
+  await settleEvents();
+
+  assert.equal(harness.input.value, '');
+  assert.equal(harness.parentMessages.length, 1);
+  assert.equal(harness.timers.some(({ delay, cleared }) => delay === 300 && !cleared), true);
+});
+
+test('Grok MAIN polling cannot mutate the editor after absolute expiry', async () => {
+  const harness = await createProviderHarness('grok', { inputAvailable: false });
+
+  harness.deliver();
+  await Promise.resolve();
+  harness.setNow(NOW + 60_001);
+  harness.installInput();
+  harness.runTimer(400);
+  await settleEvents();
+
+  assert.equal(harness.input.value, '');
+  assert.equal(harness.parentMessages.length, 1);
+});
+
+test('Grok MAIN completed request cache evicts its oldest ID after 256 deliveries', async () => {
+  const harness = await createProviderHarness('grok');
+  const request = (requestId, text) => ({
+    requestId,
+    text,
+    autoSubmit: false,
+    expiresAt: NOW + 60_000,
+  });
+
+  for (let index = 0; index <= 256; index += 1) {
+    harness.dispatchGrokRequest(request(`main-cache-${index}`, `cache-${index}`));
+    await settleEvents();
+  }
+  harness.dispatchGrokRequest(request('main-cache-0', 'replayed'));
+  await settleEvents();
+
+  assert.equal(harness.input.value, 'replayed');
+});
+
+test('Grok timeout removes its result listener and clears pending retries', async () => {
+  const harness = await createProviderHarness('grok', { loadGrokMain: false });
+
+  harness.deliver();
+  await Promise.resolve();
+  harness.runTimer(30000);
+  await settleEvents();
+
+  assert.equal(harness.parentMessages.length, 1);
+  assert.equal(harness.document.listeners.get('__PAGE_MIND_GROK_RESULT__')?.length ?? 0, 0);
+  assert.equal(harness.timers.some(({ delay, cleared }) => delay === 300 && !cleared), false);
 });

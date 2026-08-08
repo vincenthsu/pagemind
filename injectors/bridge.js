@@ -3,6 +3,8 @@
 
   const RETRY_DELAY = 400;
   const MAX_RETRIES = 120;
+  const PAYLOAD_TTL_MS = 60_000;
+  const MAX_COMPLETED_PAYLOAD_IDS = 256;
   const isTopLevel = window.top === window;
   const isDirectPanelChild = !isTopLevel && window.parent === window.top;
 
@@ -35,22 +37,46 @@
     }, RETRY_DELAY);
   }
 
+  function isPayloadCurrent(payload) {
+    const now = Date.now();
+    const createdAt = payload?.createdAt;
+    const age = now - createdAt;
+    return Number.isFinite(now)
+      && Number.isFinite(createdAt)
+      && Number.isFinite(age)
+      && age >= 0
+      && age <= PAYLOAD_TTL_MS;
+  }
+
+  function rememberCompleted(activeDeliveryState, payloadId) {
+    activeDeliveryState.deliveredPayloadIds.add(payloadId);
+    if (activeDeliveryState.deliveredPayloadIds.size > MAX_COMPLETED_PAYLOAD_IDS) {
+      const oldestPayloadId = activeDeliveryState.deliveredPayloadIds.values().next().value;
+      activeDeliveryState.deliveredPayloadIds.delete(oldestPayloadId);
+    }
+  }
+
   async function deliverPayload(activeRegistrationId, payloadId, payload, payloadHandler) {
     const activeDeliveryState = deliveryState;
-    if (
-      registrationId !== activeRegistrationId
-      || activeDeliveryState.deliveredPayloadIds.has(payloadId)
-      || activeDeliveryState.inFlightPayloadIds.has(payloadId)
-    ) return false;
+    if (registrationId !== activeRegistrationId) return 'ignored';
+    if (activeDeliveryState.deliveredPayloadIds.has(payloadId)) return 'completed';
+    if (activeDeliveryState.inFlightPayloadIds.has(payloadId)) return 'in-flight';
+    if (!isPayloadCurrent(payload)) return 'expired';
     activeDeliveryState.inFlightPayloadIds.add(payloadId);
+    const deliveryContext = Object.freeze({
+      isCurrent: () => (
+        registrationId === activeRegistrationId && isPayloadCurrent(payload)
+      ),
+    });
     try {
-      await payloadHandler(payload);
-      if (registrationId !== activeRegistrationId) return false;
-      activeDeliveryState.deliveredPayloadIds.add(payloadId);
-      return true;
+      await payloadHandler(payload, deliveryContext);
+      if (registrationId !== activeRegistrationId) return 'ignored';
+      if (!isPayloadCurrent(payload)) return 'expired';
+      rememberCompleted(activeDeliveryState, payloadId);
+      return 'delivered';
     } catch (error) {
       console.error('PageMind payload handler failed', error);
-      return false;
+      return 'failed';
     } finally {
       activeDeliveryState.inFlightPayloadIds.delete(payloadId);
     }
@@ -69,13 +95,13 @@
     payload,
     payloadHandler,
   ) {
-    const delivered = await deliverPayload(
+    const result = await deliverPayload(
       activeRegistrationId,
       payload.id,
       payload,
       payloadHandler,
     );
-    if (delivered || registrationId !== activeRegistrationId) return;
+    if (result !== 'failed' || registrationId !== activeRegistrationId) return;
     retryForRegistration(activeRegistrationId, retries, (remaining) => {
       void deliverTabPayload(activeRegistrationId, remaining, payload, payloadHandler);
     });
@@ -151,13 +177,16 @@
         || !isValidDelivery(data.payloadId, data.payload)
       ) return;
 
-      const delivered = await deliverPayload(
+      const result = await deliverPayload(
         activeRegistrationId,
         data.payloadId,
         data.payload,
         payloadHandler,
       );
-      if (!delivered || registrationId !== activeRegistrationId) return;
+      if (
+        (result !== 'delivered' && result !== 'completed')
+        || registrationId !== activeRegistrationId
+      ) return;
       window.parent.postMessage({
         type: 'PAGE_MIND_DELIVERED',
         provider: registeredProvider,

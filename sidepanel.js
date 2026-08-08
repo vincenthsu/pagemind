@@ -2,7 +2,8 @@ import { DEFAULT_PROMPTS, PROVIDERS } from './lib/providers.js';
 import { isValidCustomProviderUrl, resolveProviderUrl } from './lib/provider-embedding.js';
 
 export const FRAME_READY_TIMEOUT_MS = 12_000;
-export const DELIVERY_ACK_TIMEOUT_MS = 12_000;
+// Exceeds the slowest provider's bounded editor wait plus submit delay (24.5s).
+export const DELIVERY_ACK_TIMEOUT_MS = 32_000;
 
 function hasProvider(provider) {
   return typeof provider === 'string' && Object.hasOwn(PROVIDERS, provider);

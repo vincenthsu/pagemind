@@ -140,6 +140,7 @@ function createHarness({
   const storageWrites = [];
   const scriptCalls = [];
   const timers = [];
+  let currentTime = 0;
   let payloadResponse = { payload: null };
   let panelReadyResponse = { provider: pendingProvider };
   let summarizeResponse = { success: true, destination: 'sidepanel' };
@@ -188,7 +189,7 @@ function createHarness({
   };
   const clock = {
     setTimeout(callback, delay) {
-      const timer = { callback, delay, cleared: false };
+      const timer = { callback, delay, cleared: false, fired: false, runAt: currentTime + delay };
       timers.push(timer);
       return timer;
     },
@@ -201,6 +202,16 @@ function createHarness({
     chrome, controller, document, get frame() { return document.getElementById('providerFrame'); },
     runtimeCalls, runtimeEvent, scriptCalls, storageChanged,
     storageWrites, tabCreates, timers, trustedSender, window,
+    advanceTime(milliseconds) {
+      currentTime += milliseconds;
+      let timer;
+      while ((timer = timers.find((candidate) => (
+        !candidate.cleared && !candidate.fired && candidate.runAt <= currentTime
+      )))) {
+        timer.fired = true;
+        timer.callback();
+      }
+    },
     setPayload(payload) { payloadResponse = { payload }; },
     setPayloadResponse(response) { payloadResponse = response; },
     setPanelReadyResponse(response) { panelReadyResponse = response; },
@@ -230,10 +241,10 @@ function createHarness({
   };
 }
 
-test('exports the testable 12 second readiness timeout', () => {
+test('exports separate readiness and provider-delivery deadlines', () => {
   assert.equal(typeof createSidePanelController, 'function');
   assert.equal(FRAME_READY_TIMEOUT_MS, 12_000);
-  assert.equal(DELIVERY_ACK_TIMEOUT_MS, 12_000);
+  assert.equal(DELIVERY_ACK_TIMEOUT_MS, 32_000);
 });
 
 test('initialization asks for pending provider and navigates exactly once', async () => {
@@ -299,7 +310,7 @@ test('delivery ACK timeout shows fallback and Retry redelivers the retained payl
   await harness.controller.initialize();
   await harness.ready('grok', 'https://grok.com');
   const ackTimer = harness.timers.at(-1);
-  assert.equal(ackTimer.delay, 12_000);
+  assert.equal(ackTimer.delay, 32_000);
   ackTimer.callback();
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), true);
 
@@ -308,6 +319,20 @@ test('delivery ACK timeout shows fallback and Retry redelivers the retained payl
   await flush();
   await harness.ready('grok', 'https://grok.com');
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'needs-ack');
+});
+
+test('slow normal provider completion is acknowledged before fallback deadline', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'gemini' } });
+  harness.setPayload({ id: 'slow-normal', provider: 'gemini', text: 'Summary' });
+  await harness.controller.initialize();
+  await harness.ready('gemini', 'https://gemini.google.com');
+
+  harness.advanceTime(24_500);
+  assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
+
+  await harness.ack('gemini', 'https://gemini.google.com', 'slow-normal');
+  harness.advanceTime(7_500);
+  assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
 });
 
 test('ACK-timeout Retry reposts retained payload when fresh lookup transiently fails', async () => {
@@ -324,7 +349,7 @@ test('ACK-timeout Retry reposts retained payload when fresh lookup transiently f
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'retry-retained');
   assert.match(harness.document.getElementById('statusMsg').textContent, /temporary lookup failure/);
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
-  assert.equal(harness.timers.at(-1).delay, 12_000);
+  assert.equal(harness.timers.at(-1).delay, 32_000);
 });
 
 test('readiness fetches fresh payload before choosing between fresh and retained', async () => {

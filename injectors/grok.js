@@ -16,7 +16,25 @@
       && keys.every((key, index) => key === expectedKeys[index]);
   }
 
-  function injectPayload(payload) {
+  function getEditorText() {
+    const inputEl = (
+      document.querySelector('textarea[placeholder]') ||
+      document.querySelector('textarea') ||
+      document.querySelector('[contenteditable="true"][role="textbox"]') ||
+      document.querySelector('[data-lexical-editor="true"]') ||
+      document.querySelector('[contenteditable="true"]')
+    );
+    if (!inputEl) return '';
+    return inputEl.tagName === 'TEXTAREA'
+      ? String(inputEl.value ?? '')
+      : String(inputEl.textContent ?? '');
+  }
+
+  function ensureCurrent(delivery) {
+    if (delivery && !delivery.isCurrent()) throw new Error('Grok payload expired');
+  }
+
+  function injectPayload(payload, delivery) {
     if (!payload || typeof payload.text !== 'string') {
       return Promise.reject(new TypeError('Grok payload text must be a string'));
     }
@@ -26,6 +44,7 @@
       requestId,
       text: payload.text,
       autoSubmit: payload.autoSubmit !== false,
+      expiresAt: payload.createdAt + 60_000,
     };
 
     return new Promise((resolve, reject) => {
@@ -47,14 +66,31 @@
           || typeof event.detail.ok !== 'boolean'
         ) return;
 
+        if (event.detail.ok && !getEditorText().includes(payload.text)) return;
         settled = true;
         cleanup();
-        if (event.detail.ok) resolve();
-        else reject(new Error('Grok MAIN-world injection failed'));
+        if (!event.detail.ok) {
+          reject(new Error('Grok MAIN-world injection failed'));
+          return;
+        }
+        try {
+          ensureCurrent(delivery);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       }
 
       function dispatchRequest() {
         if (settled) return;
+        try {
+          ensureCurrent(delivery);
+        } catch (error) {
+          settled = true;
+          cleanup();
+          reject(error);
+          return;
+        }
         document.dispatchEvent(new CustomEvent(REQUEST_EVENT, { detail }));
         if (!settled) retryTimer = setTimeout(dispatchRequest, RETRY_DELAY);
       }
