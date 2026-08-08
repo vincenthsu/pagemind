@@ -5,7 +5,23 @@ import { DEFAULT_PROMPTS } from '../lib/providers.js';
 
 const optionsHtml = await readFile(new URL('../options.html', import.meta.url), 'utf8');
 const optionsJs = await readFile(new URL('../options.js', import.meta.url), 'utf8');
+const sidePanelHtml = await readFile(new URL('../sidepanel.html', import.meta.url), 'utf8');
 const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
+
+test('side panel exposes an accessible provider host shell without hiding provider controls', () => {
+  for (const id of [
+    'panelControls', 'collapseBtn', 'reloadBtn', 'openTabBtn', 'providerFrame',
+    'frameFallback', 'retryFrameBtn', 'fallbackNewTabBtn', 'providerGrid',
+    'promptSelect', 'summarizeBtn', 'settingsBtn', 'statusMsg', 'pageTitle', 'pageUrl',
+  ]) {
+    assert.match(sidePanelHtml, new RegExp(`id="${id}"`), `missing #${id}`);
+  }
+  assert.match(sidePanelHtml, /id="collapseBtn"[^>]*aria-expanded="true"/);
+  assert.match(sidePanelHtml, /id="statusMsg"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(sidePanelHtml, /id="frameFallback"[^>]*role="alert"/);
+  assert.match(sidePanelHtml, /<iframe[^>]*id="providerFrame"[^>]*title="AI provider"/);
+  assert.doesNotMatch(sidePanelHtml, /id="panelControls"[^>]*hidden/);
+});
 
 function radioValues(name) {
   return [...optionsHtml.matchAll(new RegExp(`<input\\s+type="radio"\\s+name="${name}"\\s+value="([^"]+)"`, 'g'))]
