@@ -474,6 +474,24 @@ test('same-provider PANEL_NAVIGATE delivers immediately while a different provid
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'other');
 });
 
+test('when sidepanelNewChat is true, same-provider PANEL_NAVIGATE forces a frame reload to start a new chat', async () => {
+  const harness = createHarness({ settings: { lastProvider: 'chatgpt', sidepanelNewChat: true } });
+  await harness.controller.initialize();
+  await harness.ready('chatgpt', 'https://chatgpt.com');
+  const firstFrame = harness.frame;
+
+  harness.setPayload({ id: 'new-chat-payload', provider: 'chatgpt', text: 'New chat text' });
+  await harness.runtimeEvent.emit({
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'chatgpt', url: 'https://chatgpt.com/',
+  }, harness.trustedSender);
+  await flush();
+
+  assert.notEqual(harness.frame, firstFrame);
+  assert.equal(harness.frame.src, 'https://chatgpt.com/');
+  await harness.ready('chatgpt', 'https://chatgpt.com');
+  assert.equal(harness.frame.posts.at(-1).message.payloadId, 'new-chat-payload');
+});
+
 test('a stale payload response cannot deliver into a newer provider navigation', async () => {
   const harness = createHarness({ settings: { lastProvider: 'chatgpt' } });
   await harness.controller.initialize();

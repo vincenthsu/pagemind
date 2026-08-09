@@ -15,6 +15,7 @@ let defaultPromptIndex = 0;
 let openMode = 'companion';
 let autoSubmit = true;
 let includeUrl = true;
+let sidepanelNewChat = false;
 let maxContentChars = DEFAULT_CONTENT_CHARS;
 let toolbarAction = 'popup';
 let saveTimer = null;
@@ -71,6 +72,10 @@ function registerEventListeners() {
     includeUrl = Boolean(event.target.checked);
     autoSave('includeUrl');
   });
+  document.getElementById('sidepanelNewChatToggle').addEventListener('change', (event) => {
+    sidepanelNewChat = Boolean(event.target.checked);
+    autoSave('sidepanelNewChat');
+  });
   document.getElementById('maxCharsInput').addEventListener('change', (event) => {
     maxContentChars = normalizeMaxContentChars(Number(event.target.value));
     event.target.value = maxContentChars;
@@ -90,7 +95,7 @@ function registerEventListeners() {
 function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'maxContentChars', 'quickSummarize'],
+      ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'sidepanelNewChat', 'maxContentChars', 'quickSummarize'],
       (data) => {
         try {
           if (chrome.runtime?.lastError) {
@@ -122,6 +127,7 @@ function applySettings(data) {
   toolbarAction = resolveToolbarAction(settings);
   autoSubmit = typeof settings.autoSubmit === 'boolean' ? settings.autoSubmit : true;
   includeUrl = typeof settings.includeUrl === 'boolean' ? settings.includeUrl : true;
+  sidepanelNewChat = typeof settings.sidepanelNewChat === 'boolean' ? settings.sidepanelNewChat : false;
   maxContentChars = normalizeMaxContentChars(settings.maxContentChars);
 }
 
@@ -139,6 +145,7 @@ function renderSettings() {
   if (toolbarRadio) toolbarRadio.checked = true;
   document.getElementById('autoSubmitToggle').checked = autoSubmit;
   document.getElementById('includeUrlToggle').checked = includeUrl;
+  document.getElementById('sidepanelNewChatToggle').checked = sidepanelNewChat;
   document.getElementById('maxCharsInput').value = maxContentChars;
 }
 
@@ -364,6 +371,7 @@ function buildSavePayload(keys) {
   if (dirty.has('toolbarAction')) payload.toolbarAction = toolbarAction;
   if (dirty.has('autoSubmit')) payload.autoSubmit = autoSubmit;
   if (dirty.has('includeUrl')) payload.includeUrl = includeUrl;
+  if (dirty.has('sidepanelNewChat')) payload.sidepanelNewChat = sidepanelNewChat;
   if (dirty.has('maxContentChars')) payload.maxContentChars = maxContentChars;
   return payload;
 }

@@ -45,6 +45,7 @@ export function createSidePanelController({
     selectedProvider: 'chatgpt',
     customUrls: {},
     prompts: [...DEFAULT_PROMPTS],
+    sidepanelNewChat: false,
     panelWindowId: null,
     sourceTabId: null,
     hasSelection: false,
@@ -150,7 +151,7 @@ export function createSidePanelController({
     let data = {};
     try {
       data = await callbackCall((callback) => chrome.storage.sync.get(
-        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'customUrls'],
+        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'customUrls', 'sidepanelNewChat'],
         callback,
       ));
     } catch (error) {
@@ -158,6 +159,7 @@ export function createSidePanelController({
     }
     if (!data || typeof data !== 'object') data = {};
     state.selectedProvider = hasProvider(data.lastProvider) ? data.lastProvider : 'chatgpt';
+    state.sidepanelNewChat = typeof data.sidepanelNewChat === 'boolean' ? data.sidepanelNewChat : false;
     const customPrompts = Array.isArray(data.customPrompts)
       ? data.customPrompts.filter((prompt) => typeof prompt === 'string')
       : [];
@@ -529,7 +531,8 @@ export function createSidePanelController({
     ) return;
     const resolvedUrl = acceptedNavigationUrl(message.provider, message.url);
     if (
-      message.provider === state.selectedProvider
+      !state.sidepanelNewChat
+      && message.provider === state.selectedProvider
       && resolvedUrl === state.currentUrl
       && state.providerReady
     ) {
@@ -687,9 +690,16 @@ export function createSidePanelController({
       if (changeInfo?.status === 'complete') void refreshActiveTab();
     });
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'sync' && Object.hasOwn(changes, 'customUrls')) {
-        state.customUrlsRevision += 1;
-        state.customUrls = normalizeCustomUrls(changes.customUrls?.newValue);
+      if (areaName === 'sync') {
+        if (Object.hasOwn(changes, 'customUrls')) {
+          state.customUrlsRevision += 1;
+          state.customUrls = normalizeCustomUrls(changes.customUrls?.newValue);
+        }
+        if (Object.hasOwn(changes, 'sidepanelNewChat')) {
+          state.sidepanelNewChat = typeof changes.sidepanelNewChat?.newValue === 'boolean'
+            ? changes.sidepanelNewChat.newValue
+            : false;
+        }
       }
     });
   }

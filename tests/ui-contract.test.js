@@ -86,7 +86,7 @@ class FakeDocument {
     this.elements = new Map();
     for (const id of [
       'addPromptBtn', 'newPromptInput', 'providerGrid', 'autoSubmitToggle', 'includeUrlToggle',
-      'maxCharsInput', 'defaultPromptSelect', 'promptList', 'saveFeedback',
+      'sidepanelNewChatToggle', 'maxCharsInput', 'defaultPromptSelect', 'promptList', 'saveFeedback',
       ...PROVIDERS.map((provider) => `url-${provider}`),
     ]) this.elements.set(id, new FakeElement(id));
 
@@ -475,6 +475,21 @@ test('pageshow restores normal saving after a pagehide with an in-flight save', 
       { includeUrl: false },
     ]);
     harness.resolveSave();
+  } finally {
+    harness.restore();
+  }
+});
+
+test('sidepanelNewChatToggle persists sidepanelNewChat setting', async () => {
+  const harness = await bootOptions({ settings: { sidepanelNewChat: false } });
+  try {
+    await harness.start();
+    const toggle = harness.document.getElementById('sidepanelNewChatToggle');
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    await toggle.dispatch('change');
+    await waitForSave();
+    assert.deepEqual(harness.calls, [{ sidepanelNewChat: true }]);
   } finally {
     harness.restore();
   }
