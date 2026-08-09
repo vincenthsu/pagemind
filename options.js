@@ -3,7 +3,7 @@
 import { DEFAULT_PROMPTS } from './lib/providers.js';
 import { normalizeOpenMode, resolveToolbarAction } from './lib/settings.js';
 
-const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
+const PROVIDERS = ['chatgpt', 'gemini', 'claude'];
 const MIN_CONTENT_CHARS = 1000;
 const MAX_CONTENT_CHARS = 100000;
 const DEFAULT_CONTENT_CHARS = 12000;

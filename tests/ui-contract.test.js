@@ -6,7 +6,7 @@ import { DEFAULT_PROMPTS } from '../lib/providers.js';
 const optionsHtml = await readFile(new URL('../options.html', import.meta.url), 'utf8');
 const optionsJs = await readFile(new URL('../options.js', import.meta.url), 'utf8');
 const sidePanelHtml = await readFile(new URL('../sidepanel.html', import.meta.url), 'utf8');
-const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
+const PROVIDERS = ['chatgpt', 'gemini', 'claude'];
 
 test('side panel exposes an accessible provider host shell without hiding provider controls', () => {
   for (const id of [

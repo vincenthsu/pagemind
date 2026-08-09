@@ -10,7 +10,7 @@ const {
 } = await import('../sidepanel.js?contract-test');
 globalThis.document = previousDocument;
 
-const PROVIDERS = ['chatgpt', 'gemini', 'claude', 'grok'];
+const PROVIDERS = ['chatgpt', 'gemini', 'claude'];
 
 class FakeClassList {
   constructor() { this.values = new Set(); }
@@ -285,7 +285,7 @@ test('only an exact delivery ACK clears the locally retained payload', async () 
 
   await harness.ack('claude', 'https://evil.test', 'ack-me');
   await harness.ack('claude', 'https://claude.ai', 'wrong-id');
-  await harness.ack('grok', 'https://claude.ai', 'ack-me');
+  await harness.ack('gemini', 'https://claude.ai', 'ack-me');
   await harness.ack('claude', 'https://claude.ai', 'ack-me', { windowId: 8 });
   await harness.window.dispatch('message', {
     source: {},
@@ -305,10 +305,10 @@ test('only an exact delivery ACK clears the locally retained payload', async () 
 });
 
 test('delivery ACK timeout shows fallback and Retry redelivers the retained payload', async () => {
-  const harness = createHarness({ settings: { lastProvider: 'grok' } });
-  harness.setPayload({ id: 'needs-ack', provider: 'grok', text: 'Summary' });
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'needs-ack', provider: 'claude', text: 'Summary' });
   await harness.controller.initialize();
-  await harness.ready('grok', 'https://grok.com');
+  await harness.ready('claude', 'https://claude.ai');
   const ackTimer = harness.timers.at(-1);
   assert.equal(ackTimer.delay, 32_000);
   ackTimer.callback();
@@ -317,7 +317,7 @@ test('delivery ACK timeout shows fallback and Retry redelivers the retained payl
   harness.setPayloadResponse({ payload: null });
   await harness.document.getElementById('retryFrameBtn').dispatch('click');
   await flush();
-  await harness.ready('grok', 'https://grok.com');
+  await harness.ready('claude', 'https://claude.ai');
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'needs-ack');
 });
 
@@ -336,16 +336,16 @@ test('slow normal provider completion is acknowledged before fallback deadline',
 });
 
 test('ACK-timeout Retry reposts retained payload when fresh lookup transiently fails', async () => {
-  const harness = createHarness({ settings: { lastProvider: 'grok' } });
-  harness.setPayload({ id: 'retry-retained', provider: 'grok', text: 'Summary' });
+  const harness = createHarness({ settings: { lastProvider: 'claude' } });
+  harness.setPayload({ id: 'retry-retained', provider: 'claude', text: 'Summary' });
   await harness.controller.initialize();
-  await harness.ready('grok', 'https://grok.com');
+  await harness.ready('claude', 'https://claude.ai');
   harness.timers.at(-1).callback();
 
   harness.setPayloadResponse({ error: 'temporary lookup failure' });
   await harness.document.getElementById('retryFrameBtn').dispatch('click');
   await flush();
-  await harness.ready('grok', 'https://grok.com');
+  await harness.ready('claude', 'https://claude.ai');
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'retry-retained');
   assert.match(harness.document.getElementById('statusMsg').textContent, /temporary lookup failure/);
   assert.equal(harness.document.getElementById('frameFallback').classList.contains('visible'), false);
@@ -463,14 +463,14 @@ test('same-provider PANEL_NAVIGATE delivers immediately while a different provid
   assert.equal(harness.frame.srcWrites.length, 1);
   assert.equal(harness.frame.posts[0].message.payloadId, 'same');
 
-  harness.setPayload({ id: 'other', provider: 'grok', text: 'Other' });
+  harness.setPayload({ id: 'other', provider: 'gemini', text: 'Other' });
   await harness.runtimeEvent.emit({
-    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'grok', url: 'https://grok.com/',
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'gemini', url: 'https://gemini.google.com/app',
   }, harness.trustedSender);
   await flush();
-  assert.equal(harness.frame.srcWrites.at(-1), 'https://grok.com/');
+  assert.equal(harness.frame.srcWrites.at(-1), 'https://gemini.google.com/app');
   assert.equal(harness.frame.posts.length, 0);
-  await harness.ready('grok', 'https://grok.com');
+  await harness.ready('gemini', 'https://gemini.google.com');
   assert.equal(harness.frame.posts.at(-1).message.payloadId, 'other');
 });
 
@@ -605,13 +605,13 @@ test('a delayed older runtime navigation cannot override a newer navigation', as
     type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
   }, harness.trustedSender);
   await harness.runtimeEvent.emit({
-    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'grok', url: 'https://grok.com/',
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'gemini', url: 'https://gemini.google.com/app',
   }, harness.trustedSender);
   customUrlReads[1]({ customUrls: {} });
   await flush();
   customUrlReads[0]({ customUrls: {} });
   await flush();
-  assert.equal(harness.frame.src, 'https://grok.com/');
+  assert.equal(harness.frame.src, 'https://gemini.google.com/app');
 });
 
 test('local provider navigation supersedes runtime handler waiting on URL refresh', async () => {
@@ -645,7 +645,7 @@ test('a superseded custom URL refresh failure cannot overwrite current status', 
     type: 'PANEL_NAVIGATE', windowId: 7, provider: 'claude', url: 'https://claude.ai/new',
   }, harness.trustedSender);
   await harness.runtimeEvent.emit({
-    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'grok', url: 'https://grok.com/',
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'gemini', url: 'https://gemini.google.com/app',
   }, harness.trustedSender);
   customUrlReads[1]({ customUrls: {} });
   await flush();
@@ -892,12 +892,12 @@ test('delayed retry discovery cannot navigate over a newer background navigation
   };
   await harness.document.getElementById('retryFrameBtn').dispatch('click');
   await harness.runtimeEvent.emit({
-    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'grok', url: 'https://grok.com/',
+    type: 'PANEL_NAVIGATE', windowId: 7, provider: 'gemini', url: 'https://gemini.google.com/app',
   }, harness.trustedSender);
   await flush();
   releaseDiscovery({ provider: 'chatgpt' });
   await flush();
-  assert.equal(harness.frame.src, 'https://grok.com/');
+  assert.equal(harness.frame.src, 'https://gemini.google.com/app');
 });
 
 test('successful same-frame recovery clears both retrieval error and fallback overlay', async () => {
@@ -994,7 +994,7 @@ test('provider and prompt selections persist normalized values', async () => {
   assert.deepEqual(harness.storageWrites, [{ lastProvider: 'claude' }, { lastPromptIndex: 3 }]);
   assert.deepEqual(
     harness.document.providerButtons.map((button) => button.getAttribute('aria-pressed')),
-    ['false', 'false', 'true', 'false'],
+    ['false', 'false', 'true'],
   );
 });
 

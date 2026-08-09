@@ -3,7 +3,7 @@
   "name": "PageMind",
   "version": "1.1.0",
   "minimum_chrome_version": "116",
-  "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization.",
+  "description": "Send web page content or YouTube transcripts to ChatGPT, Gemini, or Claude for summarization.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -44,7 +44,6 @@
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
     "https://claude.ai/*",
-    "https://grok.com/*",
     "https://www.youtube.com/*",
     "<all_urls>"
   ],
@@ -82,28 +81,6 @@
       ],
       "run_at": "document_idle",
       "all_frames": true
-    },
-    {
-      "matches": [
-        "https://grok.com/*"
-      ],
-      "js": [
-        "injectors/bridge.js",
-        "injectors/grok.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true
-    },
-    {
-      "matches": [
-        "https://grok.com/*"
-      ],
-      "js": [
-        "injectors/grok-main.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [

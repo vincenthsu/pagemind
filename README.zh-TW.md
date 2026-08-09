@@ -1,7 +1,7 @@
 # PageMind ✨
 ### *一鍵搞定。你的 AI。任何頁面。*
 
-> **已經付費訂閱 ChatGPT、Gemini、Claude 或 Grok？**
+> **已經付費訂閱 ChatGPT、Gemini 或 Claude？**
 > 那就充分利用它 — 不需要額外付費、不需要 API Key、沒有用量限制、不被瀏覽器綁死。
 
 PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube 影片的主要內容，自動送進你最愛的 AI 對話介面，讓 AI 幫你總結、翻譯、萃取重點 — 全程在你已登入的 AI 介面完成，資料完全由你掌控。
@@ -11,19 +11,18 @@ PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube
 | ❌ 沒有 PageMind | ✅ 有了 PageMind |
 |---|---|
 | 複製文章 → 切換分頁 → 貼上 → 輸入提示詞 | **點一下，搞定** |
-| 瀏覽器內建 AI，換瀏覽器就沒了 | 支援 4 大 AI，隨時切換 |
+| 瀏覽器內建 AI，換瀏覽器就沒了 | 支援 3 大 AI，隨時切換 |
 | 需要填 API Key、煩惱 token 費用 | 直接使用你現有的付費訂閱 |
 | 閱讀長文、看影片消耗大量時間 | 秒懂重點，高效吸收 |
 
 ## ✨ 核心功能
 
 - **⚡ One-Click 總結** — 點一下圖示即完成，沒有多餘步驟，沒有複製貼上。
-- **🤖 支援 4 大 AI 訂閱** — 直接使用你已登入的帳號，無需 API Key：
+- **🤖 支援 3 大 AI 訂閱** — 直接使用你已登入的帳號，無需 API Key：
   - **ChatGPT** (OpenAI)
   - **Gemini** (Google)
   - **Claude** (Anthropic)
-  - **Grok** (xAI)
-- **📑 原生側邊面板** — 在 Chrome 原生 Side Panel 中使用 ChatGPT、Gemini、Claude 或 Grok。
+- **📑 原生側邊面板** — 在 Chrome 原生 Side Panel 中使用 ChatGPT、Gemini 或 Claude。
 - **🪟 三種 AI 開啟位置** — 可選原生 Side Panel、並排 Companion Window 或新分頁。
 - **🖱️ 可設定工具列圖示** — 可選開啟 PageMind 選單、直接摘要或開關 Side Panel。
 - **🎬 YouTube 逐字稿提取** — 自動抓取影片字幕，讓 AI 幫你「看」影片。
@@ -55,7 +54,7 @@ PageMind 是一款 Chrome 擴充功能，**一鍵提取**當前網頁或 YouTube
 
 1. 瀏覽任何文章、新聞或 YouTube 影片
 2. 點擊工具列上的 **PageMind** 圖示（或點擊右鍵選單）
-3. 選擇你的 **AI 提供者**（ChatGPT、Gemini、Claude 或 Grok）
+3. 選擇你的 **AI 提供者**（ChatGPT、Gemini 或 Claude）
 4. 從下拉選單選擇提示詞，或點擊 ⚙ 新增自訂提示詞
 5. 點擊 **Summarize This Page**
 6. PageMind 會在你設定的 AI 開啟位置（Side Panel、並排視窗或新分頁）開啟 AI，內容自動送出，等待回應即可

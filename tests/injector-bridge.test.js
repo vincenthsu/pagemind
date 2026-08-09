@@ -11,7 +11,6 @@ const INJECTOR_URLS = Object.freeze({
   chatgpt: new URL('../injectors/chatgpt.js', import.meta.url),
   gemini: new URL('../injectors/gemini.js', import.meta.url),
   claude: new URL('../injectors/claude.js', import.meta.url),
-  grok: new URL('../injectors/grok.js', import.meta.url),
 });
 
 async function createHarness({
@@ -102,9 +101,7 @@ async function createHarness({
 async function createProviderHarness(provider, {
   clearInputOnSubmit = false,
   execCommandResult = true,
-  grokScriptOrder = 'main-first',
   inputAvailable = true,
-  loadGrokMain = true,
   now = NOW,
   initialInputText = '',
   submitAvailable = true,
@@ -113,9 +110,6 @@ async function createProviderHarness(provider, {
   const sources = await Promise.all([
     readFile(BRIDGE_URL, 'utf8'),
     readFile(INJECTOR_URLS[provider], 'utf8'),
-    ...(provider === 'grok'
-      ? [readFile(new URL('../injectors/grok-main.js', import.meta.url), 'utf8')]
-      : []),
   ]);
   const parentMessages = [];
   const windowMessages = [];
@@ -207,12 +201,10 @@ async function createProviderHarness(provider, {
     chatgpt: createElement('DIV'),
     gemini: createElement('DIV'),
     claude: createElement('DIV'),
-    grok: createElement('TEXTAREA'),
   };
   const submit = createElement('BUTTON');
   submit.disabled = submitDisabled;
-  if (provider === 'grok') inputs.grok.value = initialInputText;
-  else inputs[provider].textContent = initialInputText;
+  inputs[provider].textContent = initialInputText;
   if (clearInputOnSubmit) {
     const originalClick = submit.click;
     submit.click = () => {
@@ -225,13 +217,11 @@ async function createProviderHarness(provider, {
     chatgpt: '#prompt-textarea',
     gemini: '.ql-editor[contenteditable="true"]',
     claude: '.ProseMirror[contenteditable="true"]',
-    grok: 'textarea[placeholder]',
   };
   const submitSelectors = {
     chatgpt: 'button[data-testid="send-button"]',
     gemini: 'button.send-button',
     claude: 'button[aria-label="Send Message"]',
-    grok: 'button[aria-label="Send"]',
   };
   if (inputAvailable) selectorResults.set(primarySelectors[provider], inputs[provider]);
   if (submitAvailable) selectorResults.set(submitSelectors[provider], submit);
@@ -291,19 +281,10 @@ async function createProviderHarness(provider, {
   context.globalThis = context;
 
   vm.runInNewContext(sources[0], context, { filename: 'injectors/bridge.js' });
-  function installGrokMain() {
-    vm.runInNewContext(sources[2], context, { filename: 'injectors/grok-main.js' });
-  }
   function installProvider() {
     vm.runInNewContext(sources[1], context, { filename: `injectors/${provider}.js` });
   }
-  if (provider === 'grok' && grokScriptOrder === 'isolated-first') {
-    installProvider();
-    if (loadGrokMain) installGrokMain();
-  } else {
-    if (provider === 'grok' && loadGrokMain) installGrokMain();
-    installProvider();
-  }
+  installProvider();
   return {
     deliver(overrides = {}) {
       const event = {
@@ -351,7 +332,6 @@ async function createProviderHarness(provider, {
     input: inputs[provider],
     installInput() { selectorResults.set(primarySelectors[provider], inputs[provider]); },
     removeInput() { selectorResults.delete(primarySelectors[provider]); },
-    installGrokMain,
     parent,
     parentMessages,
     runTimer(delay) {
@@ -373,9 +353,6 @@ async function createProviderHarness(provider, {
     },
     dispatchInput() {
       inputs[provider].dispatchEvent(new FakeEvent('input', { bubbles: true }));
-    },
-    dispatchStaticGrokResult(detail) {
-      document.dispatchEvent(new FakeCustomEvent('__PAGE_MIND_GROK_RESULT__', { detail }));
     },
     submit,
     timers,
@@ -800,7 +777,7 @@ test('register validates its provider and handler', async () => {
   assert.throws(() => harness.bridge.register('chatgpt'), /function/);
 });
 
-for (const provider of ['chatgpt', 'gemini', 'claude', 'grok']) {
+for (const provider of ['chatgpt', 'gemini', 'claude']) {
   test(`${provider} provider wiring completes panel delivery through the bridge`, async () => {
     const harness = await createProviderHarness(provider);
 
@@ -812,13 +789,12 @@ for (const provider of ['chatgpt', 'gemini', 'claude', 'grok']) {
     harness.deliver();
     await settleEvents();
 
-    const injectedText = provider === 'grok' ? harness.input.value : harness.input.textContent;
+    const injectedText = harness.input.textContent;
     assert.equal(injectedText, `Prompt for ${provider}`);
     const expectedInputEvents = {
       chatgpt: ['input', 'input'],
       gemini: ['input', 'input', 'keyup'],
       claude: ['input', 'input'],
-      grok: ['input', 'change'],
     };
     assert.deepEqual(harness.input.events.map(({ type }) => type), expectedInputEvents[provider]);
     assert.deepEqual(structuredClone(harness.parentMessages.at(-1)), {
@@ -838,7 +814,6 @@ for (const [provider, delay] of [
   ['chatgpt', 700],
   ['gemini', 900],
   ['claude', 700],
-  ['grok', 800],
 ]) {
   test(`${provider} provider wiring preserves delayed auto-submit`, async () => {
     const harness = await createProviderHarness(provider);
@@ -963,234 +938,4 @@ test('provider wiring rejects malformed and untrusted panel deliveries', async (
 
   assert.equal(harness.input.textContent, '');
   assert.equal(harness.parentMessages.length, 1);
-});
-
-test('Grok uses random document-local request/result channels without window messages', async () => {
-  const harness = await createProviderHarness('grok');
-  const readyEvent = harness.documentEvents.find(({ type }) => (
-    type === '__PAGE_MIND_GROK_CHANNEL_READY__'
-  ));
-
-  assert.ok(readyEvent);
-  assert.deepEqual(
-    Object.keys(readyEvent.detail).sort(),
-    ['bootstrapId', 'requestEvent', 'resultEvent'],
-  );
-  assert.notEqual(readyEvent.detail.requestEvent, readyEvent.detail.resultEvent);
-  assert.equal(readyEvent.detail.requestEvent.includes('PAGE_MIND_GROK'), false);
-  assert.equal(readyEvent.detail.resultEvent.includes('PAGE_MIND_GROK'), false);
-
-  harness.deliver();
-  await settleEvents();
-
-  const requestEvent = harness.documentEvents.find(({ type }) => (
-    type === readyEvent.detail.requestEvent
-  ));
-  const resultEvent = harness.documentEvents.find(({ type }) => (
-    type === readyEvent.detail.resultEvent
-  ));
-  assert.ok(requestEvent);
-  assert.ok(resultEvent);
-  assert.deepEqual(
-    Object.keys(requestEvent.detail).sort(),
-    ['autoSubmit', 'expiresAt', 'requestId', 'text'],
-  );
-  assert.equal(requestEvent.detail.expiresAt, NOW + 60_000);
-  assert.equal(requestEvent.detail.text, 'Prompt for grok');
-  assert.deepEqual(Object.keys(resultEvent.detail).sort(), ['ok', 'requestId']);
-  assert.equal(resultEvent.detail.requestId, requestEvent.detail.requestId);
-  assert.equal(resultEvent.detail.ok, true);
-  assert.equal(harness.documentEvents.some(({ type }) => (
-    type === '__PAGE_MIND_GROK_DELIVER__' || type === '__PAGE_MIND_GROK_RESULT__'
-  )), false);
-  assert.equal(harness.timers.some(({ delay }) => delay === 30000), true);
-  assert.deepEqual(harness.windowMessages, []);
-});
-
-test('Grok random channels differ across provider documents', async () => {
-  const first = await createProviderHarness('grok');
-  const second = await createProviderHarness('grok');
-  const getReady = (harness) => harness.documentEvents.find(({ type }) => (
-    type === '__PAGE_MIND_GROK_CHANNEL_READY__'
-  )).detail;
-
-  assert.notEqual(getReady(first).requestEvent, getReady(second).requestEvent);
-  assert.notEqual(getReady(first).resultEvent, getReady(second).resultEvent);
-});
-
-for (const grokScriptOrder of ['main-first', 'isolated-first']) {
-  test(`Grok bootstrap tolerates ${grokScriptOrder} ordering and cleans public listeners`, async () => {
-    const harness = await createProviderHarness('grok', { grokScriptOrder });
-
-    assert.equal(harness.documentEvents.some(({ type }) => (
-      type === '__PAGE_MIND_GROK_CHANNEL_READY__'
-    )), true);
-
-    for (const type of [
-      '__PAGE_MIND_GROK_CHANNEL_REQUEST__',
-      '__PAGE_MIND_GROK_CHANNEL_READY__',
-      '__PAGE_MIND_GROK_CHANNEL_ACCEPTED__',
-    ]) {
-      assert.equal(harness.document.listeners.get(type)?.length ?? 0, 0);
-    }
-    harness.deliver();
-    await settleEvents();
-    assert.equal(harness.parentMessages.filter(({ data }) => (
-      data.type === 'PAGE_MIND_DELIVERED'
-    )).length, 1);
-  });
-}
-
-test('forged Grok success without editor mutation cannot trigger an ACK', async () => {
-  const harness = await createProviderHarness('grok');
-  harness.disableGrokMainRequests();
-
-  harness.deliver();
-  await settleEvents();
-
-  assert.equal(harness.input.value, '');
-  assert.equal(harness.parentMessages.length, 1);
-  assert.equal(harness.timers.some(({ delay, cleared }) => delay === 300 && !cleared), true);
-});
-
-test('empty Grok payload is rejected without dispatch or ACK', async () => {
-  const harness = await createProviderHarness('grok', { loadGrokMain: false });
-
-  harness.deliver({ data: {
-    type: 'PAGE_MIND_DELIVER', provider: 'grok', windowId: 31,
-    payloadId: 'grok-empty',
-    payload: { provider: 'grok', text: '', autoSubmit: false, createdAt: NOW },
-  } });
-  await settleEvents();
-
-  assert.equal(harness.documentEvents.some(({ type }) => (
-    type === '__PAGE_MIND_GROK_DELIVER__'
-  )), false);
-  assert.equal(harness.parentMessages.length, 1);
-});
-
-for (const [label, initialInputText] of [
-  ['substring', 'prefix Prompt for grok suffix'],
-  ['exact text', 'Prompt for grok'],
-]) {
-  test(`preexisting Grok ${label} cannot validate a forged success`, async () => {
-    const harness = await createProviderHarness('grok', {
-      initialInputText,
-    });
-    harness.disableGrokMainRequests();
-
-    harness.deliver();
-    await settleEvents();
-    const oldRequest = harness.documentEvents.find(({ type }) => (
-      type === '__PAGE_MIND_GROK_DELIVER__'
-    ));
-    harness.dispatchStaticGrokResult({
-      requestId: oldRequest?.detail.requestId ?? 'forged-static-id',
-      ok: true,
-    });
-    await settleEvents();
-
-    assert.equal(harness.input.value, initialInputText);
-    assert.equal(harness.parentMessages.length, 1);
-  });
-}
-
-test('Grok latches genuine exact insertion before auto-submit clears the editor', async () => {
-  const harness = await createProviderHarness('grok', { clearInputOnSubmit: true });
-
-  harness.deliver({ data: {
-    type: 'PAGE_MIND_DELIVER', provider: 'grok', windowId: 31,
-    payloadId: 'grok-cleared-after-submit',
-    payload: { provider: 'grok', text: 'Clear me', autoSubmit: true, createdAt: NOW },
-  } });
-  await settleEvents();
-  harness.runTimer(800);
-  await settleEvents();
-
-  assert.equal(harness.input.value, '');
-  assert.equal(harness.parentMessages.filter(({ data }) => (
-    data.type === 'PAGE_MIND_DELIVERED'
-  )).length, 1);
-});
-
-test('exact mutate and restore cannot make a fixed static result event ACK', async () => {
-  const harness = await createProviderHarness('grok', { inputAvailable: false });
-
-  harness.deliver();
-  await Promise.resolve();
-  const oldRequest = harness.documentEvents.find(({ type }) => (
-    type === '__PAGE_MIND_GROK_DELIVER__'
-  ));
-  harness.installInput();
-  harness.setInputText('Prompt for grok');
-  harness.dispatchInput();
-  harness.setInputText('');
-  harness.removeInput();
-  harness.dispatchStaticGrokResult({
-    requestId: oldRequest?.detail.requestId ?? 'forged-static-id',
-    ok: true,
-  });
-  await settleEvents();
-
-  assert.equal(harness.parentMessages.length, 1);
-});
-
-test('Grok MAIN uses document-start event primitives after page monkeypatching', async () => {
-  const harness = await createProviderHarness('grok');
-  harness.patchPageEventAPIs();
-
-  harness.deliver();
-  await settleEvents();
-
-  assert.equal(harness.input.value, 'Prompt for grok');
-  assert.equal(harness.parentMessages.filter(({ data }) => (
-    data.type === 'PAGE_MIND_DELIVERED'
-  )).length, 1);
-});
-
-test('Grok MAIN polling cannot mutate the editor after absolute expiry', async () => {
-  const harness = await createProviderHarness('grok', { inputAvailable: false });
-
-  harness.deliver();
-  await Promise.resolve();
-  harness.setNow(NOW + 60_001);
-  harness.installInput();
-  harness.runTimer(400);
-  await settleEvents();
-
-  assert.equal(harness.input.value, '');
-  assert.equal(harness.parentMessages.length, 1);
-});
-
-test('Grok MAIN completed request cache evicts its oldest ID after 256 deliveries', async () => {
-  const harness = await createProviderHarness('grok');
-  const request = (requestId, text) => ({
-    requestId,
-    text,
-    autoSubmit: false,
-    expiresAt: NOW + 60_000,
-  });
-
-  for (let index = 0; index <= 256; index += 1) {
-    harness.dispatchGrokRequest(request(`main-cache-${index}`, `cache-${index}`));
-    await settleEvents();
-  }
-  harness.dispatchGrokRequest(request('main-cache-0', 'replayed'));
-  await settleEvents();
-
-  assert.equal(harness.input.value, 'replayed');
-});
-
-test('Grok timeout removes its result listener and clears pending retries', async () => {
-  const harness = await createProviderHarness('grok');
-  const channel = harness.disableGrokMainRequests();
-
-  harness.deliver();
-  await settleEvents();
-  harness.runTimer(30000);
-  await settleEvents();
-
-  assert.equal(harness.parentMessages.length, 1);
-  assert.equal(harness.document.listeners.get(channel.resultEvent)?.length ?? 0, 0);
-  assert.equal(harness.timers.some(({ delay, cleared }) => delay === 300 && !cleared), false);
 });

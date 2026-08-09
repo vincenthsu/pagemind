@@ -1,7 +1,7 @@
 # PageMind ✨
 ### *One click. Your AI. Any page.*
 
-> **Already paying for ChatGPT, Gemini, Claude, or Grok?**
+> **Already paying for ChatGPT, Gemini, or Claude?**
 > Put that subscription to work — no extra cost, no API keys, no usage limits, no browser lock-in.
 
 PageMind is a Chrome extension that **extracts the core content** of any webpage or YouTube video and delivers it straight into your favorite AI chat interface in one click — letting AI summarize, translate, or analyze it for you, all within your own account.
@@ -11,19 +11,18 @@ PageMind is a Chrome extension that **extracts the core content** of any webpage
 | ❌ Without PageMind | ✅ With PageMind |
 |---|---|
 | Copy article → switch tab → paste → type a prompt | **One click. Done.** |
-| Browser-native AI that disappears when you switch browsers | Works with 4 major AI providers, always |
+| Browser-native AI that disappears when you switch browsers | Works with 3 major AI providers, always |
 | API keys, tokens, and unexpected bills | Uses your existing paid subscription |
 | Spending 20 minutes reading a long article | Get the key insights in seconds |
 
 ## ✨ Features
 
 - **⚡ One-Click Summarization** — Click the icon, and you're done. No copy-pasting, no tab juggling.
-- **🤖 4 AI Providers, Your Choice** — Works directly with your logged-in accounts. No API key needed:
+- **🤖 3 AI Providers, Your Choice** — Works directly with your logged-in accounts. No API key needed:
   - **ChatGPT** (OpenAI)
   - **Gemini** (Google)
   - **Claude** (Anthropic)
-  - **Grok** (xAI)
-- **📑 Native Side Panel** — Use ChatGPT, Gemini, Claude, or Grok beside the current page in Chrome's native Side Panel.
+- **📑 Native Side Panel** — Use ChatGPT, Gemini, or Claude beside the current page in Chrome's native Side Panel.
 - **🪟 Three Provider Destinations** — Send summaries to the Side Panel, a side-by-side Companion Window, or a New Tab.
 - **🖱️ Configurable Toolbar Icon** — Open the PageMind menu, summarize directly, or toggle the Side Panel.
 - **🎬 YouTube Transcript Extraction** — Automatically pulls video transcripts so AI can "watch" the video for you.

@@ -2,7 +2,7 @@
 // @name         PageMind
 // @namespace    https://github.com/pagemind
 // @version      1.3.0
-// @description  Send web page content or YouTube transcripts to ChatGPT, Gemini, Claude, or Grok for summarization. Userscript port of the PageMind Chrome extension.
+// @description  Send web page content or YouTube transcripts to ChatGPT, Gemini, or Claude for summarization. Userscript port of the PageMind Chrome extension.
 // @author       PageMind
 // @license      MIT
 // @match        *://*/*
@@ -94,27 +94,6 @@
         document.querySelector('button[aria-label="Send Message"]') ||
         document.querySelector('button[aria-label="Send message"]') ||
         document.querySelector('button[type="submit"]'),
-    },
-    grok: {
-      id: 'grok',
-      label: 'Grok',
-      url: 'https://grok.com/',
-      hosts: ['grok.com'],
-      inputType: 'auto',
-      getInput: () =>
-        document.querySelector('textarea[placeholder]') ||
-        document.querySelector('textarea') ||
-        document.querySelector('[contenteditable="true"][role="textbox"]') ||
-        document.querySelector('[data-lexical-editor="true"]') ||
-        document.querySelector('[contenteditable="true"]'),
-      getSubmit: () =>
-        document.querySelector('button[aria-label="Send"]') ||
-        document.querySelector('button[aria-label="Submit"]') ||
-        document.querySelector('button[aria-label="送出"]') ||
-        document.querySelector('button[aria-label="提交"]') ||
-        document.querySelector('button[aria-label="傳送"]') ||
-        document.querySelector('button[type="submit"]') ||
-        document.querySelector('button:has(svg[viewBox] path)'),
     },
   };
 

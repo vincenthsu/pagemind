@@ -1043,7 +1043,7 @@ test('a nested provider frame cannot claim a payload targeted to its top-level t
 
 test('PANEL_READY reveals a pending provider only to its exact integer side-panel window target', async () => {
   const payload = createPendingPayload({
-    id: 'payload-panel', text: 'Text', provider: 'grok', target: { kind: 'sidepanel', windowId: 17 },
+    id: 'payload-panel', text: 'Text', provider: 'claude', target: { kind: 'sidepanel', windowId: 17 },
   });
   const harness = createChrome({ session: { pendingPayload: payload } });
   await loadBackground(harness);
@@ -1062,13 +1062,13 @@ test('PANEL_READY reveals a pending provider only to its exact integer side-pane
   assert.equal(routedPayload(harness, 'sidepanel', 17), payload);
   assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: 18 }, sender), { provider: null });
   assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: '17' }, sender), { provider: null });
-  assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: 17 }, sender), { provider: 'grok' });
+  assert.deepEqual(await sendRuntimeMessage(harness, { type: 'PANEL_READY', windowId: 17 }, sender), { provider: 'claude' });
   assert.equal(routedPayload(harness, 'sidepanel', 17), payload);
 });
 
 test('PANEL_READY expired cleanup preserves a newer replacement payload', async () => {
   const expired = createPendingPayload({
-    id: 'payload-panel-expired', text: 'Expired', provider: 'grok',
+    id: 'payload-panel-expired', text: 'Expired', provider: 'chatgpt',
     target: { kind: 'sidepanel', windowId: 17 }, createdAt: Date.now() - 60_001,
   });
   const replacement = createPendingPayload({
@@ -1100,7 +1100,7 @@ test('PANEL_READY expired cleanup preserves a newer replacement payload', async 
 
 test('PANEL_READY does not reveal a provider from a replaced matching snapshot', async () => {
   const original = createPendingPayload({
-    id: 'payload-panel-original', text: 'Original', provider: 'grok',
+    id: 'payload-panel-original', text: 'Original', provider: 'chatgpt',
     target: { kind: 'sidepanel', windowId: 17 },
   });
   const replacement = createPendingPayload({
@@ -1166,7 +1166,7 @@ test('the PageMind side-panel document can consume its exact window-targeted pay
 
 test('GET_PAYLOAD removes expired payloads without returning them', async () => {
   const payload = createPendingPayload({
-    id: 'payload-expired', text: 'Old text', provider: 'grok',
+    id: 'payload-expired', text: 'Old text', provider: 'claude',
     target: { kind: 'tab', tabId: 91 }, createdAt: Date.now() - 60_001,
   });
   const harness = createChrome({ session: { pendingPayload: payload } });
@@ -1174,7 +1174,7 @@ test('GET_PAYLOAD removes expired payloads without returning them', async () => 
 
   const response = await sendRuntimeMessage(
     harness,
-    { type: 'GET_PAYLOAD', provider: 'grok', context: 'tab' },
+    { type: 'GET_PAYLOAD', provider: 'claude', context: 'tab' },
     { tab: { id: 91 }, frameId: 0 },
   );
 
@@ -1187,7 +1187,7 @@ test('payload route reads prune malformed entries while preserving valid unmatch
     id: 'payload-valid', text: 'Keep me', provider: 'claude', target: { kind: 'tab', tabId: 92 },
   });
   const malformed = {
-    id: 'payload-malformed', text: '', provider: 'grok',
+    id: 'payload-malformed', text: '', provider: 'claude',
     target: { kind: 'tab', tabId: 91 }, createdAt: Date.now(),
   };
   const harness = createChrome({
@@ -1197,7 +1197,7 @@ test('payload route reads prune malformed entries while preserving valid unmatch
 
   const response = await sendRuntimeMessage(
     harness,
-    { type: 'GET_PAYLOAD', provider: 'grok', context: 'tab' },
+    { type: 'GET_PAYLOAD', provider: 'claude', context: 'tab' },
     { tab: { id: 91 }, frameId: 0 },
   );
 

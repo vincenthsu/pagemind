@@ -38,7 +38,7 @@ test('buildEmbeddingRules scopes sub-frame header removals to extension initiato
 
   assert.deepEqual(hosts, [...hosts].sort());
   assert.deepEqual(new Set(hosts), new Set([
-    'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'claude.ai', 'grok.com', 'custom.example.com',
+    'chatgpt.com', 'chat.openai.com', 'gemini.google.com', 'claude.ai', 'custom.example.com',
   ]));
   assert.deepEqual(rules.map((rule) => rule.id), rules.map((_, index) => 1000 + index));
   for (const rule of rules) {
@@ -68,11 +68,10 @@ test('buildEmbeddingRules scopes sub-frame header removals to extension initiato
   }
 });
 
-test('custom registrations add isolated scripts, a Grok MAIN script, and no built-in duplicates', () => {
+test('custom registrations add isolated scripts and no built-in duplicates', () => {
   const registrations = buildCustomContentScriptRegistrations({
     chatgpt: 'https://custom.example.com/chat',
     gemini: 'https://gemini.google.com/alternate',
-    grok: 'https://grok-custom.example.com/',
     claude: 'http://unsafe.example.com/',
   });
 
@@ -86,31 +85,11 @@ test('custom registrations add isolated scripts, a Grok MAIN script, and no buil
       persistAcrossSessions: true,
       world: 'ISOLATED',
     },
-    {
-      id: 'pagemind-custom-grok-isolated',
-      matches: ['https://grok-custom.example.com/*'],
-      js: ['injectors/bridge.js', 'injectors/grok.js'],
-      allFrames: true,
-      runAt: 'document_start',
-      persistAcrossSessions: true,
-      world: 'ISOLATED',
-    },
-    {
-      id: 'pagemind-custom-grok-main',
-      matches: ['https://grok-custom.example.com/*'],
-      js: ['injectors/grok-main.js'],
-      allFrames: true,
-      runAt: 'document_start',
-      persistAcrossSessions: true,
-      world: 'MAIN',
-    },
   ]);
   assert.deepEqual(CUSTOM_SCRIPT_IDS, [
     'pagemind-custom-chatgpt-isolated',
     'pagemind-custom-gemini-isolated',
     'pagemind-custom-claude-isolated',
-    'pagemind-custom-grok-isolated',
-    'pagemind-custom-grok-main',
   ]);
   assert.equal(Object.isFrozen(CUSTOM_SCRIPT_IDS), true);
 });
