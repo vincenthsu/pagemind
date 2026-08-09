@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  createExportPayload,
   getToolbarChromeConfig,
   normalizeOpenMode,
   resolveSummaryDestination,
   resolveToolbarAction,
+  validateImportedSettings,
 } from '../lib/settings.js';
 
 test('normalizeOpenMode preserves supported modes and defaults invalid values to companion', () => {
@@ -53,3 +55,33 @@ test('resolveSummaryDestination lets the side panel source override open mode', 
   assert.equal(resolveSummaryDestination('newtab', 'popup'), 'newtab');
   assert.equal(resolveSummaryDestination('invalid', 'popup'), 'companion');
 });
+
+test('createExportPayload creates a structured payload containing version, timestamp, and settings', () => {
+  const payload = createExportPayload({
+    defaultProvider: 'gemini',
+    customPrompts: ['Test prompt'],
+    openMode: 'sidepanel',
+  });
+
+  assert.equal(payload.version, 1);
+  assert.equal(typeof payload.exportedAt, 'string');
+  assert.equal(payload.settings.defaultProvider, 'gemini');
+  assert.deepEqual(payload.settings.customPrompts, ['Test prompt']);
+  assert.equal(payload.settings.openMode, 'sidepanel');
+});
+
+test('validateImportedSettings validates and extracts settings from wrapped and flat objects', () => {
+  assert.equal(validateImportedSettings(null), null);
+  assert.equal(validateImportedSettings('invalid'), null);
+  assert.equal(validateImportedSettings({ foo: 'bar' }), null);
+
+  const wrapped = validateImportedSettings({
+    version: 1,
+    settings: { defaultProvider: 'claude', customPrompts: ['Prompt 1'] },
+  });
+  assert.deepEqual(wrapped, { defaultProvider: 'claude', customPrompts: ['Prompt 1'] });
+
+  const flat = validateImportedSettings({ openMode: 'newtab', autoSubmit: false });
+  assert.deepEqual(flat, { openMode: 'newtab', autoSubmit: false });
+});
+

@@ -1,7 +1,7 @@
 // Options page script
 
 import { DEFAULT_PROMPTS } from './lib/providers.js';
-import { normalizeOpenMode, resolveToolbarAction } from './lib/settings.js';
+import { createExportPayload, normalizeOpenMode, resolveToolbarAction, validateImportedSettings } from './lib/settings.js';
 
 const PROVIDERS = ['chatgpt', 'gemini', 'claude'];
 const MIN_CONTENT_CHARS = 1000;
@@ -89,6 +89,18 @@ function registerEventListeners() {
   document.getElementById('defaultPromptSelect').addEventListener('change', (event) => {
     defaultPromptIndex = normalizePromptIndex(Number(event.target.value));
     autoSave('defaultPromptIndex', 'lastPromptIndex');
+  });
+
+  document.getElementById('exportSettingsBtn').addEventListener('click', () => {
+    exportSettings();
+  });
+  document.getElementById('importSettingsBtn').addEventListener('click', () => {
+    document.getElementById('importFileInput').click();
+  });
+  document.getElementById('importFileInput').addEventListener('change', (event) => {
+    const file = event.target.files?.[0];
+    if (file) importSettingsFromFile(file);
+    event.target.value = '';
   });
 }
 
@@ -393,3 +405,102 @@ function showSaveFeedback(message, isError = false) {
     feedbackTimer = setTimeout(() => feedback.classList.remove('visible'), 1500);
   }
 }
+
+function exportSettings() {
+  const currentSettings = {
+    defaultProvider,
+    lastProvider: defaultProvider,
+    defaultPromptIndex,
+    lastPromptIndex: defaultPromptIndex,
+    customPrompts,
+    customUrls: collectCustomUrls(),
+    openMode,
+    toolbarAction,
+    autoSubmit,
+    includeUrl,
+    sidepanelNewChat,
+    maxContentChars,
+  };
+  const exportData = createExportPayload(currentSettings);
+  const json = JSON.stringify(exportData, null, 2);
+  if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.download = `pagemind-settings-${dateStr}.json`;
+    if (document.body) {
+      document.body.appendChild(a);
+      if (typeof a.click === 'function') a.click();
+      if (typeof document.body.removeChild === 'function') document.body.removeChild(a);
+    } else if (typeof a.click === 'function') {
+      a.click();
+    }
+    URL.revokeObjectURL(url);
+  }
+  showSaveFeedback('✓ Settings exported');
+  return json;
+}
+
+function importSettingsFromFile(file) {
+  if (!file) return;
+  if (typeof FileReader === 'undefined') {
+    showSaveFeedback('FileReader is not supported', true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    importSettingsContent(event.target.result);
+  };
+  reader.onerror = () => {
+    showSaveFeedback('Could not read settings file', true);
+  };
+  reader.readAsText(file);
+}
+
+function importSettingsContent(text) {
+  try {
+    const parsed = JSON.parse(text);
+    const imported = validateImportedSettings(parsed);
+    if (!imported) {
+      showSaveFeedback('Could not import settings: Invalid JSON file', true);
+      return false;
+    }
+
+    applySettings(imported);
+    renderSettings();
+
+    const payload = {
+      defaultProvider,
+      lastProvider: defaultProvider,
+      defaultPromptIndex,
+      lastPromptIndex: defaultPromptIndex,
+      customPrompts,
+      customUrls,
+      openMode,
+      toolbarAction,
+      autoSubmit,
+      includeUrl,
+      sidepanelNewChat,
+      maxContentChars,
+    };
+
+    dirtyKeys.clear();
+    clearTimeout(saveTimer);
+    saveTimer = null;
+
+    chrome.storage.sync.set(payload, () => {
+      if (chrome.runtime?.lastError) {
+        showSaveFeedback('Could not save imported settings.', true);
+      } else {
+        showSaveFeedback('✓ Settings imported successfully');
+      }
+    });
+    return true;
+  } catch {
+    showSaveFeedback('Could not import settings: Invalid JSON file', true);
+    return false;
+  }
+}
+

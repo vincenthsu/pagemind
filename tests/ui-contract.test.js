@@ -78,15 +78,25 @@ class FakeElement {
   closest(selector) {
     return selector === '.provider-btn' && this.classList.contains('provider-btn') ? this : null;
   }
+  click() {
+    return this.dispatch('click');
+  }
+  removeChild(child) {
+    const idx = this.children.indexOf(child);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return child;
+  }
 }
 
 class FakeDocument {
   constructor() {
+    this.body = new FakeElement('body');
     this.listeners = new Map();
     this.elements = new Map();
     for (const id of [
       'addPromptBtn', 'newPromptInput', 'providerGrid', 'autoSubmitToggle', 'includeUrlToggle',
       'sidepanelNewChatToggle', 'maxCharsInput', 'defaultPromptSelect', 'promptList', 'saveFeedback',
+      'exportSettingsBtn', 'importSettingsBtn', 'importFileInput',
       ...PROVIDERS.map((provider) => `url-${provider}`),
     ]) this.elements.set(id, new FakeElement(id));
 
@@ -234,6 +244,9 @@ test('options expose exactly three accessible provider windows and toolbar actio
   assert.match(optionsHtml, /role="radiogroup" aria-labelledby="toolbarBehaviorLabel"/);
   assert.match(optionsHtml, /<span class="mode-option-body">/);
   assert.match(optionsHtml, /id="saveFeedback" role="status" aria-live="polite"/);
+  assert.match(optionsHtml, /id="exportSettingsBtn"/);
+  assert.match(optionsHtml, /id="importSettingsBtn"/);
+  assert.match(optionsHtml, /id="importFileInput"/);
   assert.doesNotMatch(optionsHtml, /quickSummarizeToggle|Quick Summarize/);
 });
 
@@ -494,3 +507,95 @@ test('sidepanelNewChatToggle persists sidepanelNewChat setting', async () => {
     harness.restore();
   }
 });
+
+test('exportSettingsBtn triggers settings export and displays feedback', async () => {
+  const harness = await bootOptions({ settings: { defaultProvider: 'gemini' } });
+  try {
+    await harness.start();
+    const exportBtn = harness.document.getElementById('exportSettingsBtn');
+    await exportBtn.dispatch('click');
+    const feedback = harness.document.getElementById('saveFeedback');
+    assert.equal(feedback.classList.contains('visible'), true);
+    assert.equal(feedback.textContent, '✓ Settings exported');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('importing valid settings file updates UI and persists to chrome.storage', async () => {
+  const harness = await bootOptions();
+  try {
+    await harness.start();
+    const fileInput = harness.document.getElementById('importFileInput');
+    const validPayload = JSON.stringify({
+      version: 1,
+      settings: {
+        defaultProvider: 'claude',
+        customPrompts: ['Imported prompt'],
+        openMode: 'newtab',
+      },
+    });
+
+    fileInput.files = [{ name: 'settings.json' }];
+    const previousFileReader = globalThis.FileReader;
+    globalThis.FileReader = class {
+      readAsText() {
+        setTimeout(() => this.onload({ target: { result: validPayload } }), 0);
+      }
+    };
+
+    await fileInput.dispatch('change', { target: fileInput });
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.deepEqual(harness.calls, [{
+      defaultProvider: 'claude',
+      lastProvider: 'claude',
+      defaultPromptIndex: 0,
+      lastPromptIndex: 0,
+      customPrompts: ['Imported prompt'],
+      customUrls: {},
+      openMode: 'newtab',
+      toolbarAction: 'popup',
+      autoSubmit: true,
+      includeUrl: true,
+      sidepanelNewChat: false,
+      maxContentChars: 12000,
+    }]);
+
+    const feedback = harness.document.getElementById('saveFeedback');
+    assert.equal(feedback.classList.contains('visible'), true);
+    assert.equal(feedback.textContent, '✓ Settings imported successfully');
+
+    globalThis.FileReader = previousFileReader;
+  } finally {
+    harness.restore();
+  }
+});
+
+test('importing invalid settings file shows error feedback', async () => {
+  const harness = await bootOptions();
+  try {
+    await harness.start();
+    const fileInput = harness.document.getElementById('importFileInput');
+    fileInput.files = [{ name: 'invalid.json' }];
+    const previousFileReader = globalThis.FileReader;
+    globalThis.FileReader = class {
+      readAsText() {
+        setTimeout(() => this.onload({ target: { result: 'invalid json' } }), 0);
+      }
+    };
+
+    await fileInput.dispatch('change', { target: fileInput });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const feedback = harness.document.getElementById('saveFeedback');
+    assert.equal(feedback.classList.contains('visible'), true);
+    assert.equal(feedback.classList.contains('error'), true);
+    assert.equal(feedback.textContent, 'Could not import settings: Invalid JSON file');
+
+    globalThis.FileReader = previousFileReader;
+  } finally {
+    harness.restore();
+  }
+});
+
