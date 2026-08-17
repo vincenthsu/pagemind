@@ -1,7 +1,8 @@
 // Options page script
 
-import { DEFAULT_PROMPTS } from './lib/providers.js';
+import { DEFAULT_PROMPT_KEYS, getDefaultPrompts } from './lib/providers.js';
 import { createExportPayload, normalizeOpenMode, resolveToolbarAction, validateImportedSettings } from './lib/settings.js';
+import { applyI18n, applyLocaleSetting, normalizeLocale, t } from './lib/i18n.js';
 
 const PROVIDERS = ['chatgpt', 'gemini', 'claude'];
 const MIN_CONTENT_CHARS = 1000;
@@ -18,6 +19,7 @@ let includeUrl = true;
 let sidepanelNewChat = false;
 let maxContentChars = DEFAULT_CONTENT_CHARS;
 let toolbarAction = 'popup';
+let localeSetting = 'auto';
 let saveTimer = null;
 let feedbackTimer = null;
 let saveInFlight = false;
@@ -91,6 +93,15 @@ function registerEventListeners() {
     autoSave('defaultPromptIndex', 'lastPromptIndex');
   });
 
+  document.getElementById('localeSelect')?.addEventListener('change', (event) => {
+    localeSetting = normalizeLocale(event.target.value) ?? 'auto';
+    applyLocaleSetting({ locale: localeSetting }, chrome);
+    applyI18n(document);
+    renderPromptList();
+    renderDefaultPromptSelect();
+    autoSave('locale');
+  });
+
   document.getElementById('exportSettingsBtn').addEventListener('click', () => {
     exportSettings();
   });
@@ -107,7 +118,7 @@ function registerEventListeners() {
 function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'sidepanelNewChat', 'maxContentChars', 'quickSummarize'],
+      ['customPrompts', 'customUrls', 'defaultProvider', 'defaultPromptIndex', 'openMode', 'toolbarAction', 'autoSubmit', 'includeUrl', 'sidepanelNewChat', 'maxContentChars', 'quickSummarize', 'locale'],
       (data) => {
         try {
           if (chrome.runtime?.lastError) {
@@ -129,6 +140,8 @@ function loadSettings() {
 
 function applySettings(data) {
   const settings = isPlainObject(data) ? data : {};
+  localeSetting = normalizeLocale(settings.locale) ?? 'auto';
+  applyLocaleSetting({ locale: localeSetting }, chrome);
   customPrompts = Array.isArray(settings.customPrompts)
     ? settings.customPrompts.map((prompt) => typeof prompt === 'string' ? prompt.trim() : '').filter(Boolean)
     : [];
@@ -144,6 +157,9 @@ function applySettings(data) {
 }
 
 function renderSettings() {
+  applyI18n(document);
+  const localeSelect = document.getElementById('localeSelect');
+  if (localeSelect) localeSelect.value = localeSetting;
   updateProviderButtons();
   renderPromptList();
   renderDefaultPromptSelect();
@@ -176,7 +192,7 @@ function normalizeCustomUrls(value) {
 }
 
 function normalizePromptIndex(value) {
-  const maxIndex = Math.max(0, customPrompts.length + DEFAULT_PROMPTS.length - 1);
+  const maxIndex = Math.max(0, customPrompts.length + DEFAULT_PROMPT_KEYS.length - 1);
   if (!Number.isInteger(value)) return 0;
   return Math.min(Math.max(value, 0), maxIndex);
 }
@@ -194,7 +210,7 @@ function updateProviderButtons() {
 
 function renderDefaultPromptSelect() {
   const select = document.getElementById('defaultPromptSelect');
-  const allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
+  const allPrompts = [...customPrompts, ...getDefaultPrompts()];
   select.innerHTML = '';
   allPrompts.forEach((prompt, index) => {
     const option = document.createElement('option');
@@ -212,16 +228,16 @@ function renderPromptList() {
   if (customPrompts.length > 0) {
     const customHeader = document.createElement('li');
     customHeader.className = 'section-divider';
-    customHeader.textContent = 'Custom Prompts';
+    customHeader.textContent = t('optionsCustomPrompts');
     list.appendChild(customHeader);
     customPrompts.forEach((prompt, index) => list.appendChild(createPromptItem(prompt, index, 'custom')));
   }
 
   const builtinHeader = document.createElement('li');
   builtinHeader.className = 'section-divider';
-  builtinHeader.textContent = 'Built-in Prompts';
+  builtinHeader.textContent = t('optionsBuiltinPrompts');
   list.appendChild(builtinHeader);
-  DEFAULT_PROMPTS.forEach((prompt) => list.appendChild(createPromptItem(prompt, -1, 'builtin')));
+  getDefaultPrompts().forEach((prompt) => list.appendChild(createPromptItem(prompt, -1, 'builtin')));
 }
 
 function createPromptItem(prompt, index, type) {
@@ -235,13 +251,13 @@ function createPromptItem(prompt, index, type) {
 
   const tag = document.createElement('span');
   tag.className = 'prompt-tag';
-  tag.textContent = type === 'custom' ? 'Custom' : 'Built-in';
+  tag.textContent = t(type === 'custom' ? 'optionsTagCustom' : 'optionsTagBuiltin');
   item.appendChild(tag);
 
   if (type === 'custom') {
     const upButton = document.createElement('button');
     upButton.className = 'icon-btn up';
-    upButton.title = 'Move up';
+    upButton.title = t('optionsMoveUp');
     upButton.textContent = '↑';
     upButton.disabled = index === 0;
     upButton.addEventListener('click', () => {
@@ -251,7 +267,7 @@ function createPromptItem(prompt, index, type) {
 
     const downButton = document.createElement('button');
     downButton.className = 'icon-btn down';
-    downButton.title = 'Move down';
+    downButton.title = t('optionsMoveDown');
     downButton.textContent = '↓';
     downButton.disabled = index === customPrompts.length - 1;
     downButton.addEventListener('click', () => {
@@ -261,7 +277,7 @@ function createPromptItem(prompt, index, type) {
 
     const deleteButton = document.createElement('button');
     deleteButton.className = 'icon-btn';
-    deleteButton.title = 'Remove';
+    deleteButton.title = t('optionsRemove');
     deleteButton.textContent = '✕';
     deleteButton.addEventListener('click', () => {
       removePrompt(index);
@@ -328,9 +344,9 @@ function flushDirtySettings() {
     saveInFlight = false;
     if (error) {
       keys.forEach((key) => dirtyKeys.add(key));
-      showSaveFeedback('Could not save settings. Try again.', true);
+      showSaveFeedback(t('optionsSaveFailed'), true);
     } else {
-      showSaveFeedback('✓ Settings saved');
+      showSaveFeedback(t('optionsSaved'));
       if (!isExiting && dirtyKeys.size > 0) scheduleSave();
     }
   });
@@ -355,9 +371,9 @@ function flushExitDirtySettings() {
   chrome.storage.sync.set(payload, () => {
     if (chrome.runtime?.lastError) {
       keys.forEach((key) => dirtyKeys.add(key));
-      showSaveFeedback('Could not save settings. Try again.', true);
+      showSaveFeedback(t('optionsSaveFailed'), true);
     } else {
-      showSaveFeedback('✓ Settings saved');
+      showSaveFeedback(t('optionsSaved'));
     }
   });
 }
@@ -385,6 +401,7 @@ function buildSavePayload(keys) {
   if (dirty.has('includeUrl')) payload.includeUrl = includeUrl;
   if (dirty.has('sidepanelNewChat')) payload.sidepanelNewChat = sidepanelNewChat;
   if (dirty.has('maxContentChars')) payload.maxContentChars = maxContentChars;
+  if (dirty.has('locale')) payload.locale = localeSetting;
   return payload;
 }
 
@@ -439,14 +456,14 @@ function exportSettings() {
     }
     URL.revokeObjectURL(url);
   }
-  showSaveFeedback('✓ Settings exported');
+  showSaveFeedback(t('optionsExported'));
   return json;
 }
 
 function importSettingsFromFile(file) {
   if (!file) return;
   if (typeof FileReader === 'undefined') {
-    showSaveFeedback('FileReader is not supported', true);
+    showSaveFeedback(t('optionsImportNoFileReader'), true);
     return;
   }
   const reader = new FileReader();
@@ -454,7 +471,7 @@ function importSettingsFromFile(file) {
     importSettingsContent(event.target.result);
   };
   reader.onerror = () => {
-    showSaveFeedback('Could not read settings file', true);
+    showSaveFeedback(t('optionsImportReadFailed'), true);
   };
   reader.readAsText(file);
 }
@@ -464,7 +481,7 @@ function importSettingsContent(text) {
     const parsed = JSON.parse(text);
     const imported = validateImportedSettings(parsed);
     if (!imported) {
-      showSaveFeedback('Could not import settings: Invalid JSON file', true);
+      showSaveFeedback(t('optionsImportInvalid'), true);
       return false;
     }
 
@@ -484,6 +501,7 @@ function importSettingsContent(text) {
       includeUrl,
       sidepanelNewChat,
       maxContentChars,
+      locale: localeSetting,
     };
 
     dirtyKeys.clear();
@@ -492,14 +510,14 @@ function importSettingsContent(text) {
 
     chrome.storage.sync.set(payload, () => {
       if (chrome.runtime?.lastError) {
-        showSaveFeedback('Could not save imported settings.', true);
+        showSaveFeedback(t('optionsImportSaveFailed'), true);
       } else {
-        showSaveFeedback('✓ Settings imported successfully');
+        showSaveFeedback(t('optionsImported'));
       }
     });
     return true;
   } catch {
-    showSaveFeedback('Could not import settings: Invalid JSON file', true);
+    showSaveFeedback(t('optionsImportInvalid'), true);
     return false;
   }
 }

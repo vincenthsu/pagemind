@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PageMind — Settings</title>
+  <title data-i18n="optionsTitle">PageMind — Settings</title>
   <style>
     * {
       box-sizing: border-box;
@@ -476,16 +476,27 @@
 
 <body>
   <div class="page-header">
-    <h1>✨ PageMind — Settings</h1>
-    <p>Configure your default AI provider and custom prompts</p>
+    <h1 data-i18n="optionsHeading">✨ PageMind — Settings</h1>
+    <p data-i18n="optionsSubtitle">Configure your default AI provider and custom prompts</p>
   </div>
 
   <div class="container">
 
+    <!-- Interface Language -->
+    <div class="card">
+      <div class="card-title" data-i18n="optionsLanguageTitle">Language</div>
+      <div class="card-desc" data-i18n="optionsLanguageDesc">Choose the language used by the PageMind interface.</div>
+      <select class="prompt-select" id="localeSelect">
+        <option value="auto" data-i18n="optionsLanguageAuto">Match browser language</option>
+        <option value="en" data-i18n="optionsLanguageEnglish">English</option>
+        <option value="zh_TW" data-i18n="optionsLanguageZhTw">正體中文（台灣）</option>
+      </select>
+    </div>
+
     <!-- Default Provider -->
     <div class="card">
-      <div class="card-title">Default AI Provider</div>
-      <div class="card-desc">Choose which AI service to use by default when opening the popup.</div>
+      <div class="card-title" data-i18n="optionsProviderTitle">Default AI Provider</div>
+      <div class="card-desc" data-i18n="optionsProviderDesc">Choose which AI service to use by default when opening the popup.</div>
       <div class="provider-grid" id="providerGrid">
         <button class="provider-btn" data-provider="chatgpt" style="--c:#10a37f; --bg:#e8f7f2">ChatGPT</button>
         <button class="provider-btn" data-provider="gemini" style="--c:#4285f4; --bg:#e8f0fe">Gemini</button>
@@ -495,30 +506,30 @@
 
     <!-- AI Provider Window Mode -->
     <div class="card">
-      <div class="card-title" id="providerWindowLabel">AI Provider Window</div>
-      <div class="card-desc">Choose how the AI provider page opens after summarization.</div>
+      <div class="card-title" id="providerWindowLabel" data-i18n="optionsWindowTitle">AI Provider Window</div>
+      <div class="card-desc" data-i18n="optionsWindowDesc">Choose how the AI provider page opens after summarization.</div>
       <div class="mode-options" role="radiogroup" aria-labelledby="providerWindowLabel">
         <label class="mode-option">
           <input type="radio" name="openMode" value="sidepanel" id="modeSidePanel">
           <span class="mode-option-body">
-            <span class="mode-option-title">📑 Chrome Side Panel</span>
-            <span class="mode-option-desc">Embeds the selected AI provider in the native Chrome Side Panel. A new-tab
+            <span class="mode-option-title" data-i18n="optionsWindowSidePanel">📑 Chrome Side Panel</span>
+            <span class="mode-option-desc" data-i18n="optionsWindowSidePanelDesc">Embeds the selected AI provider in the native Chrome Side Panel. A new-tab
               fallback remains available.</span>
           </span>
         </label>
         <label class="mode-option">
           <input type="radio" name="openMode" value="companion" id="modeCompanion" checked>
           <span class="mode-option-body">
-            <span class="mode-option-title">➡️ Companion Window</span>
-            <span class="mode-option-desc">Opens as a side-by-side popup snapped to the right of your browser. Original
+            <span class="mode-option-title" data-i18n="optionsWindowCompanion">➡️ Companion Window</span>
+            <span class="mode-option-desc" data-i18n="optionsWindowCompanionDesc">Opens as a side-by-side popup snapped to the right of your browser. Original
               window auto-resizes and restores on close.</span>
           </span>
         </label>
         <label class="mode-option">
           <input type="radio" name="openMode" value="newtab" id="modeNewTab">
           <span class="mode-option-body">
-            <span class="mode-option-title">🆕 New Tab</span>
-            <span class="mode-option-desc">Opens the AI provider in a new browser tab in the current window.</span>
+            <span class="mode-option-title" data-i18n="optionsWindowNewTab">🆕 New Tab</span>
+            <span class="mode-option-desc" data-i18n="optionsWindowNewTabDesc">Opens the AI provider in a new browser tab in the current window.</span>
           </span>
         </label>
       </div>
@@ -526,11 +537,11 @@
 
     <!-- Sending Options -->
     <div class="card">
-      <div class="card-title">Sending Options</div>
-      <div class="card-desc">Configure how content is sent to the AI provider.</div>
+      <div class="card-title" data-i18n="optionsSendingTitle">Sending Options</div>
+      <div class="card-desc" data-i18n="optionsSendingDesc">Configure how content is sent to the AI provider.</div>
 
       <div class="toggle-row" style="margin-bottom: 12px;">
-        <span class="toggle-row-label">Auto-submit after pasting</span>
+        <span class="toggle-row-label" data-i18n="optionsAutoSubmit">Auto-submit after pasting</span>
         <label class="toggle-switch">
           <input type="checkbox" id="autoSubmitToggle" checked>
           <span class="toggle-slider"></span>
@@ -538,7 +549,7 @@
       </div>
 
       <div class="toggle-row" style="margin-bottom: 12px;">
-        <span class="toggle-row-label">Include page URL</span>
+        <span class="toggle-row-label" data-i18n="optionsIncludeUrl">Include page URL</span>
         <label class="toggle-switch">
           <input type="checkbox" id="includeUrlToggle" checked>
           <span class="toggle-slider"></span>
@@ -546,7 +557,7 @@
       </div>
 
       <div class="toggle-row" style="margin-bottom: 12px;">
-        <span class="toggle-row-label">Always start a new chat in Side Panel</span>
+        <span class="toggle-row-label" data-i18n="optionsSidepanelNewChat">Always start a new chat in Side Panel</span>
         <label class="toggle-switch">
           <input type="checkbox" id="sidepanelNewChatToggle">
           <span class="toggle-slider"></span>
@@ -554,16 +565,16 @@
       </div>
 
       <div class="number-input-row">
-        <label for="maxCharsInput">Content character limit</label>
+        <label for="maxCharsInput" data-i18n="optionsMaxChars">Content character limit</label>
         <input type="number" class="number-input" id="maxCharsInput" value="12000" min="1000" max="100000" step="1000">
-        <span class="input-suffix">chars</span>
+        <span class="input-suffix" data-i18n="optionsMaxCharsSuffix">chars</span>
       </div>
     </div>
 
     <!-- Custom AI Provider URLs -->
     <div class="card">
-      <div class="card-title">Custom AI Provider URLs</div>
-      <div class="card-desc">If you use a self-hosted instance or a custom endpoint, you can override the default AI provider URLs here. Leave empty to use the default URLs.</div>
+      <div class="card-title" data-i18n="optionsUrlsTitle">Custom AI Provider URLs</div>
+      <div class="card-desc" data-i18n="optionsUrlsDesc">If you use a self-hosted instance or a custom endpoint, you can override the default AI provider URLs here. Leave empty to use the default URLs.</div>
       
       <div class="url-input-group">
         <div class="url-input-row">
@@ -583,30 +594,30 @@
 
     <!-- Toolbar Icon Behavior -->
     <div class="card">
-      <div class="card-title" id="toolbarBehaviorLabel">Toolbar Icon Behavior</div>
-      <div class="card-desc">Choose what a normal click on the PageMind toolbar icon does. Right-click actions remain
+      <div class="card-title" id="toolbarBehaviorLabel" data-i18n="optionsToolbarTitle">Toolbar Icon Behavior</div>
+      <div class="card-desc" data-i18n="optionsToolbarDesc">Choose what a normal click on the PageMind toolbar icon does. Right-click actions remain
         available in every mode.</div>
       <div class="mode-options" role="radiogroup" aria-labelledby="toolbarBehaviorLabel">
         <label class="mode-option">
           <input type="radio" name="toolbarAction" value="popup" id="toolbarPopup" checked>
           <span class="mode-option-body">
-            <span class="mode-option-title">🧭 Open PageMind Menu</span>
-            <span class="mode-option-desc">Show the existing PageMind menu for choosing a provider and prompt.</span>
+            <span class="mode-option-title" data-i18n="optionsToolbarPopup">🧭 Open PageMind Menu</span>
+            <span class="mode-option-desc" data-i18n="optionsToolbarPopupDesc">Show the existing PageMind menu for choosing a provider and prompt.</span>
           </span>
         </label>
         <label class="mode-option">
           <input type="radio" name="toolbarAction" value="summarize" id="toolbarSummarize">
           <span class="mode-option-body">
-            <span class="mode-option-title">⚡ Summarize Directly</span>
-            <span class="mode-option-desc">Use the default provider and prompt, then open the configured AI Provider
+            <span class="mode-option-title" data-i18n="optionsToolbarSummarize">⚡ Summarize Directly</span>
+            <span class="mode-option-desc" data-i18n="optionsToolbarSummarizeDesc">Use the default provider and prompt, then open the configured AI Provider
               Window.</span>
           </span>
         </label>
         <label class="mode-option">
           <input type="radio" name="toolbarAction" value="sidepanel" id="toolbarSidePanel">
           <span class="mode-option-body">
-            <span class="mode-option-title">📑 Toggle Side Panel</span>
-            <span class="mode-option-desc">Open or close the native Side Panel without starting a summary.</span>
+            <span class="mode-option-title" data-i18n="optionsToolbarSidePanel">📑 Toggle Side Panel</span>
+            <span class="mode-option-desc" data-i18n="optionsToolbarSidePanelDesc">Open or close the native Side Panel without starting a summary.</span>
           </span>
         </label>
       </div>
@@ -614,11 +625,11 @@
 
     <!-- Custom Prompts -->
     <div class="card">
-      <div class="card-title">Prompts</div>
-      <div class="card-desc">Your custom prompts appear first in the dropdown. Reorder using the arrow buttons.</div>
+      <div class="card-title" data-i18n="optionsPromptsTitle">Prompts</div>
+      <div class="card-desc" data-i18n="optionsPromptsDesc">Your custom prompts appear first in the dropdown. Reorder using the arrow buttons.</div>
 
       <!-- Default Prompt Selector -->
-      <div class="section-label" style="margin-bottom: 6px;">Default Prompt</div>
+      <div class="section-label" style="margin-bottom: 6px;" data-i18n="optionsDefaultPrompt">Default Prompt</div>
       <select class="prompt-select" id="defaultPromptSelect" style="margin-bottom: 16px;">
         <!-- Populated by options.js -->
       </select>
@@ -630,24 +641,25 @@
       <!-- Add new prompt -->
       <div class="add-prompt-form">
         <textarea class="add-prompt-textarea" id="newPromptInput"
-          placeholder="Type a new prompt… e.g. 'List all technical terms with definitions:'"></textarea>
-        <button class="add-btn" id="addPromptBtn">+ Add</button>
+          placeholder="Type a new prompt… e.g. 'List all technical terms with definitions:'"
+          data-i18n-placeholder="optionsNewPromptPlaceholder"></textarea>
+        <button class="add-btn" id="addPromptBtn" data-i18n="optionsAddPrompt">+ Add</button>
       </div>
     </div>
 
     <!-- Import & Export Settings -->
     <div class="card">
-      <div class="card-title">Import & Export Settings</div>
-      <div class="card-desc">Backup your prompts and configuration to a JSON file, or restore settings from an exported file.</div>
+      <div class="card-title" data-i18n="optionsIoTitle">Import & Export Settings</div>
+      <div class="card-desc" data-i18n="optionsIoDesc">Backup your prompts and configuration to a JSON file, or restore settings from an exported file.</div>
       <div class="io-actions" style="display: flex; gap: 10px; flex-wrap: wrap;">
-        <button class="add-btn" id="exportSettingsBtn" type="button">📥 Export Settings</button>
-        <button class="secondary-btn" id="importSettingsBtn" type="button">📤 Import Settings</button>
+        <button class="add-btn" id="exportSettingsBtn" type="button" data-i18n="optionsExport">📥 Export Settings</button>
+        <button class="secondary-btn" id="importSettingsBtn" type="button" data-i18n="optionsImport">📤 Import Settings</button>
         <input type="file" id="importFileInput" accept=".json,application/json" style="display: none;">
       </div>
     </div>
 
     <!-- Auto-save feedback (floating) -->
-    <span class="save-feedback" id="saveFeedback" role="status" aria-live="polite">✓ Settings saved</span>
+    <span class="save-feedback" id="saveFeedback" role="status" aria-live="polite" data-i18n="optionsSaved">✓ Settings saved</span>
 
   </div>
 

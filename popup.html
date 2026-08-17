@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PageMind</title>
+  <title data-i18n="popupTitle">PageMind</title>
   <style>
     * {
       box-sizing: border-box;
@@ -217,13 +217,13 @@
 </head>
 <body>
   <div class="header">
-    <h1>✨ PageMind</h1>
-    <button class="settings-btn" id="settingsBtn" title="Settings">⚙</button>
+    <h1 data-i18n="popupHeading">✨ PageMind</h1>
+    <button class="settings-btn" id="settingsBtn" title="Settings" data-i18n-title="settings">⚙</button>
   </div>
 
   <div class="content">
     <!-- Provider Selection -->
-    <div class="section-label">AI Provider</div>
+    <div class="section-label" data-i18n="popupProviderSection">AI Provider</div>
     <div class="provider-grid" id="providerGrid">
       <button class="provider-btn" data-provider="chatgpt"
         style="--provider-color:#10a37f; --provider-bg:#e8f7f2">
@@ -243,7 +243,7 @@
 
     <!-- Prompt Selection -->
     <div class="prompt-section">
-      <div class="section-label">Prompt</div>
+      <div class="section-label" data-i18n="popupPromptSection">Prompt</div>
       <select class="prompt-select" id="promptSelect">
         <!-- Options populated by popup.js -->
       </select>
@@ -251,11 +251,11 @@
 
     <!-- Action -->
     <div class="action-area">
-      <button class="summarize-btn" id="summarizeBtn">
+      <button class="summarize-btn" id="summarizeBtn" data-i18n="popupSummarizePage">
         Summarize This Page
       </button>
       <div class="status" id="statusMsg"></div>
-      <div class="clipboard-hint" id="clipboardHint">
+      <div class="clipboard-hint" id="clipboardHint" data-i18n="popupClipboardHint">
         💡 Content also copied to clipboard
       </div>
     </div>

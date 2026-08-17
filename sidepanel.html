@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PageMind</title>
+  <title data-i18n="panelTitle">PageMind</title>
   <style>
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; }
@@ -103,39 +103,39 @@
 <body>
   <main class="shell">
     <header class="header">
-      <h1>✨ PageMind</h1>
-      <button class="icon-btn" id="collapseBtn" type="button" title="Collapse controls" aria-label="Collapse controls" aria-expanded="true" aria-controls="panelControls">⌃</button>
-      <button class="icon-btn" id="reloadBtn" type="button" title="Reload provider" aria-label="Reload provider">↻</button>
-      <button class="icon-btn" id="openTabBtn" type="button" title="Open provider in a new tab" aria-label="Open provider in a new tab">↗</button>
-      <button class="icon-btn" id="settingsBtn" type="button" title="Settings" aria-label="Settings">⚙</button>
+      <h1 data-i18n="panelHeading">✨ PageMind</h1>
+      <button class="icon-btn" id="collapseBtn" type="button" title="Collapse controls" aria-label="Collapse controls" aria-expanded="true" aria-controls="panelControls" data-i18n-title="panelCollapseControls" data-i18n-aria-label="panelCollapseControls">⌃</button>
+      <button class="icon-btn" id="reloadBtn" type="button" title="Reload provider" aria-label="Reload provider" data-i18n-title="panelReloadProvider" data-i18n-aria-label="panelReloadProvider">↻</button>
+      <button class="icon-btn" id="openTabBtn" type="button" title="Open provider in a new tab" aria-label="Open provider in a new tab" data-i18n-title="panelOpenProviderTab" data-i18n-aria-label="panelOpenProviderTab">↗</button>
+      <button class="icon-btn" id="settingsBtn" type="button" title="Settings" aria-label="Settings" data-i18n-title="settings" data-i18n-aria-label="settings">⚙</button>
     </header>
 
-    <section class="controls" id="panelControls" aria-label="Summary controls">
-      <div class="provider-grid" id="providerGrid" role="group" aria-label="AI provider">
+    <section class="controls" id="panelControls" aria-label="Summary controls" data-i18n-aria-label="panelSummaryControls">
+      <div class="provider-grid" id="providerGrid" role="group" aria-label="AI provider" data-i18n-aria-label="panelProviderGroup">
         <button class="provider-btn" type="button" data-provider="chatgpt" aria-pressed="false" style="--provider-color:#10a37f;--provider-bg:#e8f7f2"><span class="provider-dot"></span>ChatGPT</button>
         <button class="provider-btn" type="button" data-provider="gemini" aria-pressed="false" style="--provider-color:#4285f4;--provider-bg:#e8f0fe"><span class="provider-dot"></span>Gemini</button>
         <button class="provider-btn" type="button" data-provider="claude" aria-pressed="false" style="--provider-color:#d97757;--provider-bg:#fdf0ea"><span class="provider-dot"></span>Claude</button>
       </div>
       <div class="control-details">
-        <label class="sr-only" for="promptSelect">Summary prompt</label>
-        <select class="prompt-select" id="promptSelect" title="Summary prompt"></select>
-        <button class="summarize-btn" id="summarizeBtn" type="button">Summarize</button>
-        <div class="page-info" aria-label="Current page">
+        <label class="sr-only" for="promptSelect" data-i18n="panelSummaryPrompt">Summary prompt</label>
+        <select class="prompt-select" id="promptSelect" title="Summary prompt" data-i18n-title="panelSummaryPrompt"></select>
+        <button class="summarize-btn" id="summarizeBtn" type="button" data-i18n="panelSummarize">Summarize</button>
+        <div class="page-info" aria-label="Current page" data-i18n-aria-label="panelCurrentPage">
           <div class="page-title" id="pageTitle">—</div>
           <div class="page-url" id="pageUrl">—</div>
         </div>
         <div class="status" id="statusMsg" role="status" aria-live="polite"></div>
-        <div class="clipboard-hint" id="clipboardHint">Content also copied to clipboard</div>
+        <div class="clipboard-hint" id="clipboardHint" data-i18n="panelClipboardHint">Content also copied to clipboard</div>
       </div>
     </section>
 
-    <section class="frame-area" aria-label="Provider workspace">
-      <iframe class="provider-frame" id="providerFrame" title="AI provider"></iframe>
+    <section class="frame-area" aria-label="Provider workspace" data-i18n-aria-label="panelProviderWorkspace">
+      <iframe class="provider-frame" id="providerFrame" title="AI provider" data-i18n-title="panelProviderFrame"></iframe>
       <div class="fallback" id="frameFallback" role="alert" aria-live="assertive">
-        <p id="fallbackMessage">The provider did not finish loading.</p>
+        <p id="fallbackMessage" data-i18n="panelFallbackNotLoaded">The provider did not finish loading.</p>
         <div class="fallback-actions">
-          <button id="retryFrameBtn" type="button">Try again</button>
-          <button id="fallbackNewTabBtn" type="button">Open in new tab</button>
+          <button id="retryFrameBtn" type="button" data-i18n="panelTryAgain">Try again</button>
+          <button id="fallbackNewTabBtn" type="button" data-i18n="panelOpenInNewTab">Open in new tab</button>
         </div>
       </div>
     </section>

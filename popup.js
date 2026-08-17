@@ -1,7 +1,8 @@
 // Popup script — handles provider selection, prompt selection, and summarize action
 
-import { DEFAULT_PROMPTS, PROVIDERS } from './lib/providers.js';
+import { getDefaultPrompts, PROVIDERS } from './lib/providers.js';
 import { normalizeOpenMode } from './lib/settings.js';
+import { applyI18n, applyLocaleSetting, t } from './lib/i18n.js';
 
 let selectedProvider = 'chatgpt';
 let allPrompts = [];
@@ -30,11 +31,9 @@ async function updateButtonLabel() {
     });
     const selected = results.map(r => r.result).filter(Boolean).join('\n\n').trim();
     const btn = document.getElementById('summarizeBtn');
-    if (selected.length > 0) {
-      btn.textContent = '✂️ Summarize Selection';
-    } else {
-      btn.textContent = 'Summarize This Page';
-    }
+    btn.textContent = selected.length > 0
+      ? t('popupSummarizeSelection')
+      : t('popupSummarizePage');
   } catch {
     // Non-fatal — leave default label
   }
@@ -44,13 +43,15 @@ async function loadSettings() {
   return new Promise((resolve) => {
     const useSettings = (value) => {
       const data = value && typeof value === 'object' ? value : {};
+      applyLocaleSetting(data, chrome);
+      applyI18n(document);
       if (typeof data.lastProvider === 'string' && Object.hasOwn(PROVIDERS, data.lastProvider)) {
         selectedProvider = data.lastProvider;
       }
       const customPrompts = Array.isArray(data.customPrompts)
         ? data.customPrompts.filter((prompt) => typeof prompt === 'string')
         : [];
-      allPrompts = [...customPrompts, ...DEFAULT_PROMPTS];
+      allPrompts = [...customPrompts, ...getDefaultPrompts()];
       openMode = normalizeOpenMode(data.openMode);
       const requestedIndex = Number.isInteger(data.lastPromptIndex) && data.lastPromptIndex >= 0
         ? data.lastPromptIndex
@@ -65,7 +66,7 @@ async function loadSettings() {
 
     try {
       chrome.storage.sync.get(
-        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'openMode'],
+        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'openMode', 'locale'],
         (data) => useSettings(chrome.runtime.lastError ? {} : data),
       );
     } catch {
@@ -140,11 +141,9 @@ async function handleSummarize() {
       // Selection access is best-effort; background extraction can still proceed.
     }
 
-    if (selectedText.length > 0) {
-      setStatus('loading', '⏳ Sending selected text…');
-    } else {
-      setStatus('loading', '⏳ Extracting page content…');
-    }
+    setStatus('loading', selectedText.length > 0
+      ? t('popupStatusSendingSelection')
+      : t('popupStatusExtracting'));
     setButtonDisabled(true);
 
     chrome.runtime.sendMessage(
@@ -159,31 +158,26 @@ async function handleSummarize() {
       },
       (response) => {
         if (chrome.runtime.lastError) {
-          setStatus('error', '❌ Extension error: ' + chrome.runtime.lastError.message);
+          setStatus('error', t('popupErrorExtension', chrome.runtime.lastError.message));
           setButtonDisabled(false);
           return;
         }
 
         if (response?.error) {
-          setStatus('error', '❌ ' + response.error);
+          setStatus('error', t('popupErrorGeneric', response.error));
           setButtonDisabled(false);
           return;
         }
 
         if (response?.success) {
-          const providerLabels = {
-            chatgpt: 'ChatGPT',
-            gemini: 'Gemini',
-            claude: 'Claude',
-          };
-          setStatus('success', `✅ Sent to ${providerLabels[selectedProvider] || selectedProvider}`);
+          setStatus('success', t('popupStatusSent', PROVIDERS[selectedProvider]?.label || selectedProvider));
           showClipboardHint();
           setTimeout(() => window.close(), 1500);
         }
       },
     );
   } catch (error) {
-    setStatus('error', `❌ ${error?.message || String(error)}`);
+    setStatus('error', t('popupErrorGeneric', error?.message || String(error)));
     setButtonDisabled(false);
   }
 }
@@ -198,7 +192,7 @@ function setButtonDisabled(disabled) {
   const btn = document.getElementById('summarizeBtn');
   btn.disabled = disabled;
   if (disabled) {
-    btn.textContent = 'Sending…';
+    btn.textContent = t('popupSending');
   } else {
     // Restore correct label after operation
     updateButtonLabel();

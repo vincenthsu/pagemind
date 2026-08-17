@@ -33,6 +33,7 @@ jobs:
             options.js \
             sidepanel.html \
             sidepanel.js \
+            _locales/ \
             icons/ \
             content/ \
             injectors/ \

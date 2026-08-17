@@ -560,6 +560,7 @@ test('importing valid settings file updates UI and persists to chrome.storage', 
       includeUrl: true,
       sidepanelNewChat: false,
       maxContentChars: 12000,
+      locale: 'auto',
     }]);
 
     const feedback = harness.document.getElementById('saveFeedback');

@@ -1,0 +1,6 @@
+{
+  "extDescription": {
+    "message": "將網頁內容或 YouTube 字幕逐字稿傳送到 ChatGPT、Gemini 或 Claude 進行摘要。",
+    "description": "Extension description shown in the Chrome Web Store and extension manager."
+  }
+}

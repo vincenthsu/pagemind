@@ -29,6 +29,7 @@ PageMind is a Chrome extension that **extracts the core content** of any webpage
 - **🧹 Smart Content Cleaning** — Powered by Mozilla's Readability.js to strip ads, navbars, and clutter — only the good stuff gets sent.
 - **📝 Custom Prompts** — Save your go-to instructions like "Summarize in 3 bullet points", "Extract action items", or "Explain like I'm 5".
 - **📋 Clipboard Fallback** — Content is also copied to your clipboard as a backup, just in case.
+- **🌐 Multi-Language Interface** — English and Traditional Chinese (Taiwan); follows your browser language by default, or pick one in Settings.
 
 ## 📦 Installation
 
@@ -65,6 +66,7 @@ The extension can be installed by loading it as an unpacked extension in Chrome:
 
 Click the gear icon ⚙ in the extension popup to:
 
+- 🌐 Choose the **interface language** — Match browser language, English, or 正體中文（台灣）
 - 🤖 Set your **default AI provider**
 - 🪟 Choose **AI Provider Window** — Chrome Side Panel, Companion Window (side-by-side), or New Tab
 - 🖱️ Choose **Toolbar Icon Action** — Open PageMind Menu, Summarize Directly, or Toggle Side Panel

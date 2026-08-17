@@ -1,0 +1,6 @@
+{
+  "extDescription": {
+    "message": "Send web page content or YouTube transcripts to ChatGPT, Gemini, or Claude for summarization.",
+    "description": "Extension description shown in the Chrome Web Store and extension manager."
+  }
+}

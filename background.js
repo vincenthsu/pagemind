@@ -1,7 +1,7 @@
 // Service Worker — orchestrates content extraction and AI provider navigation
 // This file uses ES module syntax (manifest.json: "type": "module")
 
-import { PROVIDERS, DEFAULT_PROMPTS } from './lib/providers.js';
+import { PROVIDERS, getDefaultPrompts } from './lib/providers.js';
 import {
   normalizeOpenMode,
   resolveToolbarAction,
@@ -15,6 +15,7 @@ import {
   buildCustomContentScriptRegistrations,
 } from './lib/provider-embedding.js';
 import { createPendingPayload, matchPayloadRequest } from './lib/payload-routing.js';
+import { applyLocaleSetting, t } from './lib/i18n.js';
 
 const DEFAULT_MAX_CONTENT_CHARS = 12000;
 const MAX_PENDING_PAYLOAD_ROUTES = 32;
@@ -30,7 +31,7 @@ const TOOLBAR_SETTING_KEYS = [
 
 let cachedToolbarSettings = null;
 let toolbarSettingsCacheReady = false;
-const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']);
+const startupSettingsPromise = chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls', 'locale']);
 let pendingPayloadMutation = Promise.resolve();
 let toolbarSettingsRevision = 0;
 let latestScheduledToolbarRevision = -1;
@@ -225,7 +226,8 @@ async function initializeExtension(settingsPromise, { initializeMenus = false } 
   const requestedMenuRevision = openModeRevision;
   const requestedEmbeddingRevision = embeddingSettingsRevision;
   const settings = await (settingsPromise
-    || chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls']));
+    || chrome.storage.sync.get([...TOOLBAR_SETTING_KEYS, 'customUrls', 'locale']));
+  applyLocaleSetting(settings, chrome);
   const operations = [
     scheduleToolbarAction(settings, requestedToolbarRevision),
     scheduleEmbeddingConfiguration(settings.customUrls || {}, requestedEmbeddingRevision),
@@ -258,6 +260,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.openMode) {
     openModeRevision += 1;
     void scheduleContextMenus(changes.openMode.newValue, openModeRevision)
+      .catch((error) => console.error('[PageMind] Context menu update failed:', error));
+  }
+  if (changes.locale) {
+    applyLocaleSetting({ locale: changes.locale.newValue }, chrome);
+    openModeRevision += 1;
+    void scheduleContextMenus(latestMenuOpenMode, openModeRevision)
       .catch((error) => console.error('[PageMind] Context menu update failed:', error));
   }
   if (changes.customUrls) {
@@ -325,7 +333,8 @@ const SUMMARY_MENU_DESTINATIONS = new Map([
 async function createContextMenus(configuredOpenMode, isCurrent = () => true) {
   let destination = configuredOpenMode;
   if (destination === undefined) {
-    const settings = await chrome.storage.sync.get(['openMode']);
+    const settings = await chrome.storage.sync.get(['openMode', 'locale']);
+    applyLocaleSetting(settings, chrome);
     destination = settings.openMode;
   }
   destination = normalizeOpenMode(destination);
@@ -334,17 +343,17 @@ async function createContextMenus(configuredOpenMode, isCurrent = () => true) {
   if (!isCurrent()) return;
   chrome.contextMenus.create({
     id: `summarize-page-${destination}`,
-    title: 'Summarize This Page',
+    title: t('menuSummarizePage'),
     contexts: ['page', 'frame', 'selection', 'link'],
   });
   chrome.contextMenus.create({
     id: 'open-side-panel',
-    title: 'Open PageMind Side Panel',
+    title: t('menuOpenSidePanel'),
     contexts: ['page', 'frame', 'selection', 'link'],
   });
   chrome.contextMenus.create({
     id: 'open-settings',
-    title: 'PageMind Settings',
+    title: t('menuSettings'),
     contexts: ['page', 'frame', 'selection', 'link'],
   });
 }
@@ -674,7 +683,7 @@ async function handleSummarize({
   const invocationSequence = nextSummarizeInvocationSequence;
 
   if (typeof provider !== 'string' || !Object.hasOwn(PROVIDERS, provider)) {
-    throw new Error(`Unknown provider: ${String(provider)}`);
+    throw new Error(t('bgUnknownProvider', String(provider)));
   }
 
   let sidePanelInvocation;
@@ -688,7 +697,7 @@ async function handleSummarize({
   if (Number.isInteger(sourceTabId)) {
     activeTab = await chrome.tabs.get(sourceTabId);
     if (Number.isInteger(sourceWindowId) && activeTab?.windowId !== sourceWindowId) {
-      throw new Error('Source tab does not belong to the source window');
+      throw new Error(t('bgTabWindowMismatch'));
     }
   } else {
     const query = { active: true };
@@ -696,7 +705,7 @@ async function handleSummarize({
     else query.currentWindow = true;
     [activeTab] = await chrome.tabs.query(query);
   }
-  if (!Number.isInteger(activeTab?.id)) throw new Error('No active tab found');
+  if (!Number.isInteger(activeTab?.id)) throw new Error(t('bgNoActiveTab'));
 
   const tabUrl = typeof activeTab.url === 'string' ? activeTab.url : '';
   const settings = await chrome.storage.sync.get([
@@ -706,10 +715,13 @@ async function handleSummarize({
     'autoSubmit',
     'includeUrl',
     'maxContentChars',
+    'locale',
   ]);
-  const allPrompts = [...(Array.isArray(settings.customPrompts) ? settings.customPrompts : []), ...DEFAULT_PROMPTS];
+  applyLocaleSetting(settings, chrome);
+  const defaultPrompts = getDefaultPrompts();
+  const allPrompts = [...(Array.isArray(settings.customPrompts) ? settings.customPrompts : []), ...defaultPrompts];
   const safePromptIndex = Number.isInteger(promptIndex) ? promptIndex : 0;
-  const prompt = allPrompts[safePromptIndex] ?? DEFAULT_PROMPTS[0];
+  const prompt = allPrompts[safePromptIndex] ?? defaultPrompts[0];
   const autoSubmit = settings.autoSubmit !== undefined ? settings.autoSubmit : true;
   const includeUrl = settings.includeUrl !== undefined ? settings.includeUrl : true;
   const maxContentChars = Number.isInteger(settings.maxContentChars) && settings.maxContentChars > 0
@@ -732,7 +744,7 @@ async function handleSummarize({
   };
   if (requestedDestination === 'sidepanel') {
     const windowId = Number.isInteger(sourceWindowId) ? sourceWindowId : activeTab.windowId;
-    if (!Number.isInteger(windowId)) throw new Error('Side panel destination requires a window');
+    if (!Number.isInteger(windowId)) throw new Error(t('bgSidePanelNeedsWindow'));
     if (!sidePanelInvocation) {
       sidePanelInvocation = reserveSidePanelInvocation(windowId, invocationSequence);
     }
@@ -759,7 +771,7 @@ async function handleSummarize({
   }
 
   if (finalSelectedText) {
-    extractedContent = `[Selected text from: ${activeTab.title || tabUrl}]\n\n${finalSelectedText}`;
+    extractedContent = `${t('bgSelectedTextHeader', activeTab.title || tabUrl)}\n\n${finalSelectedText}`;
   } else if (isYouTube) {
     const results = await chrome.scripting.executeScript({
       target: { tabId: activeTab.id },
@@ -767,12 +779,13 @@ async function handleSummarize({
       world: 'MAIN',
     });
     const result = results[0]?.result;
+    const youtubeHeader = t('bgYoutubeVideo', activeTab.title || t('bgYoutubeUnknownTitle'));
     if (result?.content) {
       extractedContent = result.content;
     } else if (result?.error) {
-      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\n\n[${result.error}]`;
+      extractedContent = `${youtubeHeader}\n\n[${result.error}]`;
     } else {
-      extractedContent = `YouTube Video: ${activeTab.title || 'Unknown'}\n\n[Could not extract transcript]`;
+      extractedContent = `${youtubeHeader}\n\n${t('bgYoutubeNoTranscript')}`;
     }
   } else {
     await chrome.scripting.executeScript({
@@ -785,7 +798,7 @@ async function handleSummarize({
     });
     extractedContent = results[0]?.result;
     if (!extractedContent) {
-      extractedContent = `Page: ${activeTab.title || tabUrl}\n\n[Could not extract page content]`;
+      extractedContent = `${t('bgPageHeader', activeTab.title || tabUrl)}\n\n${t('bgNoPageContent')}`;
     }
   }
 
@@ -794,10 +807,10 @@ async function handleSummarize({
   }
 
   const truncated = extractedContent.length > maxContentChars
-    ? `${extractedContent.slice(0, maxContentChars)}\n\n[Content truncated — article is too long]`
+    ? `${extractedContent.slice(0, maxContentChars)}\n\n${t('bgContentTruncated')}`
     : extractedContent;
   let fullMessage = prompt;
-  if (includeUrl && tabUrl) fullMessage += `\n\nSource URL: ${tabUrl}`;
+  if (includeUrl && tabUrl) fullMessage += `\n\n${t('bgSourceUrl', tabUrl)}`;
   fullMessage += `\n\n---\n\n${truncated}`;
 
   if (sidePanelInvocation && !sidePanelInvocation.isCurrent()) return supersededResult;
@@ -844,7 +857,7 @@ async function handleSummarize({
     }
   }
 
-  if (!Number.isInteger(targetTabId)) throw new Error('Provider tab was not created');
+  if (!Number.isInteger(targetTabId)) throw new Error(t('bgProviderTabMissing'));
   const payload = createPendingPayload({
     id: crypto.randomUUID(),
     text: fullMessage,
@@ -914,7 +927,7 @@ async function openCompanionWindow(url, sourceWindowId) {
     top: currentWin.top,
     focused: true,
   });
-  if (!Number.isInteger(newWin?.id)) throw new Error('Companion window was not created');
+  if (!Number.isInteger(newWin?.id)) throw new Error(t('bgCompanionWindowMissing'));
 
   await chrome.storage.session.set({
     companionWindowId: newWin.id,

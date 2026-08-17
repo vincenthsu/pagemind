@@ -1,5 +1,6 @@
-import { DEFAULT_PROMPTS, PROVIDERS } from './lib/providers.js';
+import { getDefaultPrompts, PROVIDERS } from './lib/providers.js';
 import { isValidCustomProviderUrl, resolveProviderUrl } from './lib/provider-embedding.js';
+import { applyI18n, applyLocaleSetting, t } from './lib/i18n.js';
 
 export const FRAME_READY_TIMEOUT_MS = 12_000;
 // Exceeds the slowest provider's bounded editor wait plus submit delay (24.5s).
@@ -44,7 +45,7 @@ export function createSidePanelController({
     initialized: false,
     selectedProvider: 'chatgpt',
     customUrls: {},
-    prompts: [...DEFAULT_PROMPTS],
+    prompts: getDefaultPrompts(),
     sidepanelNewChat: false,
     panelWindowId: null,
     sourceTabId: null,
@@ -116,9 +117,11 @@ export function createSidePanelController({
 
   function renderButtonLabel() {
     if (elements.summarize.disabled) {
-      elements.summarize.textContent = 'Sending…';
+      elements.summarize.textContent = t('panelSending');
     } else {
-      elements.summarize.textContent = state.hasSelection ? 'Summarize Selection' : 'Summarize';
+      elements.summarize.textContent = state.hasSelection
+        ? t('panelSummarizeSelection')
+        : t('panelSummarize');
     }
   }
 
@@ -151,19 +154,21 @@ export function createSidePanelController({
     let data = {};
     try {
       data = await callbackCall((callback) => chrome.storage.sync.get(
-        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'customUrls', 'sidepanelNewChat'],
+        ['lastProvider', 'lastPromptIndex', 'customPrompts', 'customUrls', 'sidepanelNewChat', 'locale'],
         callback,
       ));
     } catch (error) {
-      setStatus('error', `Could not load settings: ${errorMessage(error)}`);
+      setStatus('error', t('panelErrorLoadSettings', errorMessage(error)));
     }
     if (!data || typeof data !== 'object') data = {};
+    applyLocaleSetting(data, chrome);
+    applyI18n(document);
     state.selectedProvider = hasProvider(data.lastProvider) ? data.lastProvider : 'chatgpt';
     state.sidepanelNewChat = typeof data.sidepanelNewChat === 'boolean' ? data.sidepanelNewChat : false;
     const customPrompts = Array.isArray(data.customPrompts)
       ? data.customPrompts.filter((prompt) => typeof prompt === 'string')
       : [];
-    state.prompts = [...customPrompts, ...DEFAULT_PROMPTS];
+    state.prompts = [...customPrompts, ...getDefaultPrompts()];
     state.customUrls = normalizeCustomUrls(data.customUrls);
     const requestedIndex = Number.isInteger(data.lastPromptIndex) && data.lastPromptIndex >= 0
       ? data.lastPromptIndex
@@ -194,7 +199,7 @@ export function createSidePanelController({
     try {
       await callbackCall((callback) => chrome.storage.sync.set(value, callback));
     } catch (error) {
-      setStatus('error', `Could not save selection: ${errorMessage(error)}`);
+      setStatus('error', t('panelErrorSaveSelection', errorMessage(error)));
     }
   }
 
@@ -219,7 +224,7 @@ export function createSidePanelController({
     elements.fallback.classList.remove('visible');
   }
 
-  function showFallback(message = 'The provider did not finish loading.') {
+  function showFallback(message = t('panelFallbackNotLoaded')) {
     elements.fallbackMessage.textContent = message;
     elements.fallback.classList.add('visible');
   }
@@ -268,7 +273,7 @@ export function createSidePanelController({
     renderProviderButtons();
 
     if (customUrlWasRejected(provider, url)) {
-      setStatus('error', `Custom URL unavailable; using the built-in ${PROVIDERS[provider].label} URL.`);
+      setStatus('error', t('panelErrorCustomUrl', PROVIDERS[provider].label));
     }
 
     replaceProviderFrame();
@@ -318,7 +323,7 @@ export function createSidePanelController({
         && state.currentOrigin === origin
         && state.retainedPayload?.payload.id === payload.id
       ) {
-        showFallback('The provider did not confirm delivery. Try again to resend.');
+        showFallback(t('panelFallbackNoAck'));
       }
     }, DELIVERY_ACK_TIMEOUT_MS);
     if (!preservePayloadError) clearPayloadError();
@@ -374,7 +379,7 @@ export function createSidePanelController({
         { preservePayloadError: true },
       )
     ) return;
-    showFallback('PageMind could not retrieve the pending summary.');
+    showFallback(t('panelFallbackNoPayload'));
   }
 
   async function consumeAndDeliver(generation, provider, origin) {
@@ -394,7 +399,7 @@ export function createSidePanelController({
         provider,
         origin,
         consumeGeneration,
-        `Could not retrieve summary: ${errorMessage(error)}`,
+        t('panelErrorRetrieveSummary', errorMessage(error)),
       );
       return;
     }
@@ -404,7 +409,7 @@ export function createSidePanelController({
         provider,
         origin,
         consumeGeneration,
-        `Could not retrieve summary: ${response.error}`,
+        t('panelErrorRetrieveSummary', response.error),
       );
       return;
     }
@@ -520,8 +525,8 @@ export function createSidePanelController({
         runtimeNavigationGeneration === state.runtimeNavigationGeneration
         && localNavigationGeneration === state.navigationGeneration
       ) {
-        setStatus('error', `Could not refresh provider URLs: ${errorMessage(error)}`);
-        showFallback('PageMind could not refresh provider settings.');
+        setStatus('error', t('panelErrorRefreshUrls', errorMessage(error)));
+        showFallback(t('panelFallbackNoSettings'));
       }
       return;
     }
@@ -578,7 +583,7 @@ export function createSidePanelController({
     }
     if (generation !== state.pageInfoGeneration) return null;
     state.sourceTabId = tab?.id ?? null;
-    elements.pageTitle.textContent = tab?.title || '(no active page)';
+    elements.pageTitle.textContent = tab?.title || t('panelNoActivePage');
     elements.pageUrl.textContent = tab?.url || '';
     if (!tab) {
       state.hasSelection = false;
@@ -598,10 +603,10 @@ export function createSidePanelController({
     setButtonDisabled(true);
     try {
       const tab = await refreshActiveTab();
-      if (!Number.isInteger(tab?.id)) throw new Error('No active tab found');
+      if (!Number.isInteger(tab?.id)) throw new Error(t('panelErrorNoActiveTab'));
       const selectedText = await readSelection(tab.id);
       const promptIndex = Number.parseInt(elements.prompt.value, 10);
-      setStatus('loading', selectedText ? 'Sending selected text…' : 'Extracting page content…');
+      setStatus('loading', selectedText ? t('panelStatusSendingSelection') : t('panelStatusExtracting'));
       const response = await sendRuntimeMessage({
         type: 'SUMMARIZE',
         provider: requestProvider,
@@ -613,15 +618,15 @@ export function createSidePanelController({
         sourceWindowId: state.panelWindowId,
       });
       if (!response || typeof response !== 'object') {
-        throw new Error('Unexpected response from the extension.');
+        throw new Error(t('panelErrorUnexpectedResponse'));
       }
       if (response?.error) throw new Error(response.error);
       if (response?.superseded) {
-        setStatus('success', 'A newer summary request took priority.');
+        setStatus('success', t('panelStatusSuperseded'));
       } else if (response?.success) {
-        setStatus('success', `Sent to ${PROVIDERS[requestProvider].label}.`);
+        setStatus('success', t('panelStatusSent', PROVIDERS[requestProvider].label));
         if (response.clipboardCopied === true) elements.clipboardHint.classList.add('visible');
-      } else throw new Error('Unexpected response from the extension.');
+      } else throw new Error(t('panelErrorUnexpectedResponse'));
     } catch (error) {
       setStatus('error', errorMessage(error));
     } finally {
@@ -637,7 +642,7 @@ export function createSidePanelController({
         callback,
       ));
     } catch (error) {
-      setStatus('error', `Could not open provider: ${errorMessage(error)}`);
+      setStatus('error', t('panelErrorOpenProvider', errorMessage(error)));
     }
   }
 
@@ -645,7 +650,7 @@ export function createSidePanelController({
     try {
       await chrome.runtime.openOptionsPage();
     } catch (error) {
-      setStatus('error', `Could not open settings: ${errorMessage(error)}`);
+      setStatus('error', t('panelErrorOpenSettings', errorMessage(error)));
     }
   }
 
@@ -664,8 +669,11 @@ export function createSidePanelController({
     elements.collapse.addEventListener('click', () => {
       const collapsed = elements.controls.classList.toggle('collapsed');
       elements.collapse.setAttribute('aria-expanded', String(!collapsed));
-      elements.collapse.setAttribute('title', collapsed ? 'Expand controls' : 'Collapse controls');
-      elements.collapse.setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls');
+      const collapseLabel = t(collapsed ? 'panelExpandControls' : 'panelCollapseControls');
+      elements.collapse.setAttribute('title', collapseLabel);
+      elements.collapse.setAttribute('aria-label', collapseLabel);
+      elements.collapse.dataset.i18nTitle = collapsed ? 'panelExpandControls' : 'panelCollapseControls';
+      elements.collapse.dataset.i18nAriaLabel = elements.collapse.dataset.i18nTitle;
       elements.collapse.textContent = collapsed ? '⌄' : '⌃';
     });
     elements.reload.addEventListener('click', () => navigate(state.selectedProvider));
@@ -676,12 +684,12 @@ export function createSidePanelController({
     elements.summarize.addEventListener('click', handleSummarize);
     window.addEventListener('message', (event) => {
       void handleFrameMessage(event).catch((error) => {
-        setStatus('error', `Provider communication failed: ${errorMessage(error)}`);
+        setStatus('error', t('panelErrorFrameMessage', errorMessage(error)));
       });
     });
     chrome.runtime.onMessage.addListener((message, sender) => {
       void handleRuntimeMessage(message, sender).catch((error) => {
-        setStatus('error', `Provider navigation failed: ${errorMessage(error)}`);
+        setStatus('error', t('panelErrorNavigation', errorMessage(error)));
       });
       return false;
     });
@@ -709,7 +717,7 @@ export function createSidePanelController({
       { populate: false },
       callback,
     ));
-    if (!Number.isInteger(currentWindow?.id)) throw new Error('Could not identify the side-panel window');
+    if (!Number.isInteger(currentWindow?.id)) throw new Error(t('panelErrorWindowId'));
     return currentWindow.id;
   }
 
@@ -742,8 +750,8 @@ export function createSidePanelController({
         navigationGeneration !== state.navigationGeneration
         || runtimeNavigationGeneration !== state.runtimeNavigationGeneration
       ) return;
-      setStatus('error', `Could not check pending summaries: ${errorMessage(error)}`);
-      showFallback('PageMind could not check pending summaries.');
+      setStatus('error', t('panelErrorPendingSummaries', errorMessage(error)));
+      showFallback(t('panelFallbackNoPending'));
     }
   }
 
@@ -756,7 +764,7 @@ export function createSidePanelController({
       state.panelWindowId = await resolvePanelWindowId();
     } catch (error) {
       setStatus('error', errorMessage(error));
-      showFallback('PageMind could not identify this browser window.');
+      showFallback(t('panelFallbackNoWindow'));
       return;
     }
 
@@ -772,7 +780,7 @@ export function createSidePanelController({
         && discoveryRuntimeNavigationGeneration === state.runtimeNavigationGeneration
       ) {
         discoveryError = error;
-        setStatus('error', `Could not check pending summaries: ${errorMessage(error)}`);
+        setStatus('error', t('panelErrorPendingSummaries', errorMessage(error)));
       }
     }
     if (
@@ -780,7 +788,7 @@ export function createSidePanelController({
       && discoveryRuntimeNavigationGeneration === state.runtimeNavigationGeneration
     ) {
       navigate(pendingProvider ?? state.selectedProvider);
-      if (discoveryError) showFallback('PageMind could not check pending summaries.');
+      if (discoveryError) showFallback(t('panelFallbackNoPending'));
     }
     await refreshActiveTab();
   }
